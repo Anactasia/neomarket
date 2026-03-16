@@ -1,0 +1,61 @@
+# Виртуальное окружение
+venv/
+env/
+ENV/
+.venv/
+*.pyc
+__pycache__/
+.pytest_cache/
+
+# Переменные окружения
+.env
+*.env
+.env.local
+.env.*.local
+
+# Базы данных
+*.db
+*.sqlite3
+postgres_data/
+pgdata/
+data/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Логи
+*.log
+logs/
+
+# Docker
+*.pid
+*.sock
+
+# Тесты
+.coverage
+htmlcov/
+.tox/
+
+# Директории с зависимостями
+node_modules/
+site-packages/
+
+# Временные файлы
+*.tmp
+*.temp
+*.bak
+
+# Файлы с секретами
+*.key
+*.pem
+*.crt
+
+# Директории сборки
+dist/
+build/
+*.egg-info/
