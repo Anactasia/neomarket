@@ -14,7 +14,7 @@
 ### 1. Клонировать репозиторий
 ```bash
 git clone <REPO_URL>
-cd neomarket/services/b2b
+cd cd services/b2b
 ```
 ### 2. Запустить с помощью Docker (рекомендуется)
 ```bash
