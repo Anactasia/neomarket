@@ -5,12 +5,17 @@ from typing import List, Optional
 
 from app.database import get_db
 from app.models.product import Product
-from app.schemas.product import Product as ProductSchema, ProductCreate, ProductUpdate
+
+from app.schemas.product import (
+    Product as ProductSchema,
+    ProductCreateWithValidation,
+    ProductUpdateWithValidation
+)
 
 router = APIRouter(prefix="/products", tags=["Товары"])
 
 @router.post("/", response_model=ProductSchema, status_code=status.HTTP_201_CREATED)
-def create_product(product: ProductCreate, db: Session = Depends(get_db)):
+def create_product(product: ProductCreateWithValidation, db: Session = Depends(get_db)):
     """
     Создать новый товар.
     - **title**: название товара
@@ -73,7 +78,7 @@ def get_product(product_id: int, db: Session = Depends(get_db)):
 @router.put("/{product_id}", response_model=ProductSchema)
 def update_product(
     product_id: int,
-    product_update: ProductUpdate,
+    product_update: ProductUpdateWithValidation,
     db: Session = Depends(get_db)
 ):
     """Обновить товар"""

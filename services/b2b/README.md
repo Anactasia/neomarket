@@ -14,7 +14,7 @@
 ### 1. Клонировать репозиторий
 ```bash
 git clone <REPO_URL>
-cd cd services/b2b
+cd services/b2b
 ```
 ### 2. Запустить с помощью Docker (рекомендуется)
 ```bash

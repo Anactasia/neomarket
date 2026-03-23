@@ -5,12 +5,17 @@ from typing import List
 
 from app.database import get_db
 from app.models.sku import SKU
-from app.schemas.sku import SKU as SKUSchema, SKUCreate, SKUUpdate
+
+from app.schemas.sku import (
+    SKU as SKUSchema,
+    SKUCreateWithValidation,
+    SKUUpdateWithValidation
+)
 
 router = APIRouter(prefix="/skus", tags=["SKU"])
 
 @router.post("/", response_model=SKUSchema, status_code=status.HTTP_201_CREATED)
-def create_sku(sku: SKUCreate, db: Session = Depends(get_db)):
+def create_sku(sku: SKUCreateWithValidation, db: Session = Depends(get_db)):
     """
     Создать новый SKU (вариант товара).
     - **product_id**: ID товара
@@ -56,7 +61,7 @@ def get_sku(sku_id: int, db: Session = Depends(get_db)):
 @router.put("/{sku_id}", response_model=SKUSchema)
 def update_sku(
     sku_id: int,
-    sku_update: SKUUpdate,
+    sku_update: SKUUpdateWithValidation,
     db: Session = Depends(get_db)
 ):
     """Обновить SKU"""
