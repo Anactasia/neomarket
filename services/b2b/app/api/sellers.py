@@ -6,12 +6,17 @@ from uuid import UUID
 
 from app.database import get_db
 from app.models.seller import Seller
-from app.schemas.seller import Seller as SellerSchema, SellerCreate, SellerUpdate
+
+from app.schemas.seller import (
+    Seller as SellerSchema,
+    SellerCreateWithValidation,
+    SellerUpdateWithValidation
+)
 
 router = APIRouter(prefix="/sellers", tags=["Продавцы"])
 
 @router.post("/", response_model=SellerSchema, status_code=status.HTTP_201_CREATED)
-def create_seller(seller: SellerCreate, db: Session = Depends(get_db)):
+def create_seller(seller: SellerCreateWithValidation, db: Session = Depends(get_db)):
     """
     Создать нового продавца.
     - **company_name**: название компании
@@ -62,7 +67,7 @@ def get_seller(seller_id: UUID, db: Session = Depends(get_db)):
 @router.put("/{seller_id}", response_model=SellerSchema)
 def update_seller(
     seller_id: UUID,
-    seller_update: SellerUpdate,
+    seller_update: SellerUpdateWithValidation,
     db: Session = Depends(get_db)
 ):
     """
