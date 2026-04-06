@@ -11,6 +11,7 @@ class CategoryBase(BaseModel):
     image_url: Optional[str] = None
     is_active: bool = True
     sort_order: int = 0
+    is_restricted: bool = False  
 
 class CategoryCreate(CategoryBase):
     pass
@@ -21,11 +22,12 @@ class CategoryUpdate(BaseModel):
     image_url: Optional[str] = None
     is_active: Optional[bool] = None
     sort_order: Optional[int] = None
+    is_restricted: Optional[bool] = None  
 
 class Category(CategoryBase):
     id: int
     level: int
-    created_at: datetime
+    created_at: Optional[datetime] = None  # ← ИЗМЕНИТЬ: сделать Optional
     updated_at: Optional[datetime] = None
     
     # Для дерева категорий

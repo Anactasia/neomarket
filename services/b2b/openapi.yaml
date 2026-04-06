@@ -1,0 +1,354 @@
+openapi: 3.0.3
+info:
+  title: NeoMarket B2B (Seller Cabinet)
+  version: "1.1"
+  description: |
+    Кабинет продавца. Создание товаров, SKU, управление ценами, накладные.
+    
+    ## Статусы товара
+    - `CREATED` — создан, ожидает отправки на модерацию
+    - `ON_MODERATION` — на проверке у модератора
+    - `MODERATED` — одобрен, виден покупателям
+    - `BLOCKED` — заблокирован, продавец видит причину
+
+servers:
+  - url: http://localhost:8000
+
+paths:
+  # ========== КАТЕГОРИИ ==========
+  /api/v1/categories:
+    get:
+      summary: Получить дерево категорий
+      tags: [Categories]
+      description: Возвращает всё дерево категорий. Используется B2C для каталога.
+      responses:
+        "200":
+          description: Дерево категорий
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "../shared/schemas.yaml#/components/schemas/Category"
+
+  # ========== ТОВАРЫ ==========
+  /api/v1/products:
+    get:
+      summary: Получить список товаров продавца
+      tags: [Products]
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: status
+          in: query
+          schema:
+            $ref: "../shared/schemas.yaml#/components/schemas/ProductStatus"
+      responses:
+        "200":
+          description: Список товаров
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: "../shared/schemas.yaml#/components/schemas/Product"
+                  pagination:
+                    $ref: "../shared/schemas.yaml#/components/schemas/Pagination"
+    
+    post:
+      summary: Создать товар
+      tags: [Products]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - title
+                - category_id
+              properties:
+                title:
+                  type: string
+                  minLength: 1
+                  maxLength: 500
+                description:
+                  type: string
+                category_id:
+                  type: integer
+                characteristics:
+                  type: array
+                  items:
+                    $ref: "../shared/schemas.yaml#/components/schemas/CharacteristicValue"
+      responses:
+        "201":
+          description: Товар создан
+          content:
+            application/json:
+              schema:
+                $ref: "../shared/schemas.yaml#/components/schemas/Product"
+        "400":
+          description: Ошибка валидации
+          content:
+            application/json:
+              schema:
+                $ref: "../shared/schemas.yaml#/components/schemas/Error"
+
+  /api/v1/products/{id}:
+    get:
+      summary: Получить товар со всеми SKU
+      tags: [Products]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Товар с SKU
+          content:
+            application/json:
+              schema:
+                $ref: "../shared/schemas.yaml#/components/schemas/Product"
+        "404":
+          description: Товар не найден
+    
+    put:
+      summary: Изменить товар
+      tags: [Products]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                description:
+                  type: string
+                category_id:
+                  type: integer
+                characteristics:
+                  type: array
+                  items:
+                    $ref: "../shared/schemas.yaml#/components/schemas/CharacteristicValue"
+      responses:
+        "200":
+          description: Товар обновлён
+          content:
+            application/json:
+              schema:
+                $ref: "../shared/schemas.yaml#/components/schemas/Product"
+        "404":
+          description: Товар не найден
+
+  # ========== SKU ==========
+  /api/v1/skus:
+    post:
+      summary: Создать SKU
+      tags: [SKU]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - product_id
+                - name
+                - price
+              properties:
+                product_id:
+                  type: integer
+                name:
+                  type: string
+                seller_sku:
+                  type: string
+                barcode:
+                  type: string
+                price:
+                  type: integer
+                  minimum: 0
+                compare_at_price:
+                  type: integer
+                quantity:
+                  type: integer
+                  default: 0
+                characteristics:
+                  type: array
+                  items:
+                    $ref: "../shared/schemas.yaml#/components/schemas/CharacteristicValue"
+      responses:
+        "201":
+          description: SKU создан
+          content:
+            application/json:
+              schema:
+                $ref: "../shared/schemas.yaml#/components/schemas/SKU"
+    
+    put:
+      summary: Изменить SKU
+      tags: [SKU]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                price:
+                  type: integer
+                compare_at_price:
+                  type: integer
+                is_active:
+                  type: boolean
+                characteristics:
+                  type: array
+                  items:
+                    $ref: "../shared/schemas.yaml#/components/schemas/CharacteristicValue"
+      responses:
+        "200":
+          description: SKU обновлён
+          content:
+            application/json:
+              schema:
+                $ref: "../shared/schemas.yaml#/components/schemas/SKU"
+
+  # ========== НАКЛАДНЫЕ ==========
+  /api/v1/invoices:
+    post:
+      summary: Создать накладную
+      tags: [Invoices]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - items
+              properties:
+                invoice_number:
+                  type: string
+                items:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - sku_id
+                      - quantity
+                    properties:
+                      sku_id:
+                        type: integer
+                      quantity:
+                        type: integer
+                        minimum: 1
+      responses:
+        "201":
+          description: Накладная создана
+          content:
+            application/json:
+              schema:
+                $ref: "../shared/schemas.yaml#/components/schemas/InvoiceFull"
+
+  /api/v1/invoices/accept:
+    post:
+      summary: Принять накладную (склад)
+      tags: [Invoices]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                invoice_id:
+                  type: integer
+                items:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      sku_id:
+                        type: integer
+                      accepted_quantity:
+                        type: integer
+      responses:
+        "200":
+          description: Накладная принята, остатки обновлены
+          content:
+            application/json:
+              schema:
+                $ref: "../shared/schemas.yaml#/components/schemas/InvoiceFull"
+
+  # ========== РЕЗЕРВИРОВАНИЕ (ДЛЯ B2C) ==========
+  /api/v1/reserve:
+    post:
+      summary: Зарезервировать товары
+      tags: [Reservation]
+      description: Вызывается B2C при оформлении заказа
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "../shared/schemas.yaml#/components/schemas/ReserveRequest"
+      responses:
+        "200":
+          description: Результат резервирования
+          content:
+            application/json:
+              schema:
+                $ref: "../shared/schemas.yaml#/components/schemas/ReserveResponse"
+        "400":
+          description: Ошибка валидации
+
+  # ========== КОЛБЭК ОТ MODERATION ==========
+  /api/v1/internal/moderation-callback:
+    post:
+      summary: Получить результат модерации
+      tags: [Internal]
+      description: Внутренний эндпоинт, вызывается Moderation сервисом
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "../shared/schemas.yaml#/components/schemas/ModerationCallback"
+      responses:
+        "200":
+          description: Статус товара обновлён
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  product_id:
+                    type: integer
+                  new_status:
+                    type: string
+        "404":
+          description: Товар не найден

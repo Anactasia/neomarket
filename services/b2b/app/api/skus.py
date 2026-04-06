@@ -5,6 +5,7 @@ from typing import List
 
 from app.database import get_db
 from app.models.sku import SKU
+from app.models.product import Product
 
 from app.schemas.sku import (
     SKU as SKUSchema,
@@ -12,7 +13,7 @@ from app.schemas.sku import (
     SKUUpdateWithValidation
 )
 
-router = APIRouter(prefix="/skus", tags=["SKU"])
+router = APIRouter()
 
 @router.post("/", response_model=SKUSchema, status_code=status.HTTP_201_CREATED)
 def create_sku(sku: SKUCreateWithValidation, db: Session = Depends(get_db)):
@@ -23,10 +24,19 @@ def create_sku(sku: SKUCreateWithValidation, db: Session = Depends(get_db)):
     - **price**: цена в копейках
     - **quantity**: количество на складе
     """
+    product = db.query(Product).filter(Product.id == sku.product_id).first()
+    if not product:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Product not found"
+        )
+
     db_sku = SKU(**sku.dict())
+
     db.add(db_sku)
     db.commit()
     db.refresh(db_sku)
+
     return db_sku
 
 @router.get("/", response_model=List[SKUSchema])
@@ -92,3 +102,23 @@ def delete_sku(sku_id: int, db: Session = Depends(get_db)):
     db.delete(sku)
     db.commit()
     return None
+
+
+
+
+
+@router.put("/{sku_id}/quantity", response_model=SKUSchema)
+def update_sku_quantity(
+    sku_id: int,
+    quantity: int,
+    db: Session = Depends(get_db)
+):
+    """Обновить остаток SKU вручную"""
+    sku = db.query(SKU).filter(SKU.id == sku_id).first()
+    if not sku:
+        raise HTTPException(status_code=404, detail="SKU не найден")
+    
+    sku.quantity = quantity
+    db.commit()
+    db.refresh(sku)
+    return sku

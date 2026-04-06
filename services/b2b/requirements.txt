@@ -7,6 +7,14 @@ pydantic==2.5.0
 pydantic-settings==2.1.0
 python-dotenv==1.0.0
 httpx==0.25.1
+
+# Тестирование
 pytest==7.4.3
+pytest-cov==4.1.0
 pytest-asyncio==0.21.1
-email-validator
+
+# Валидация
+email-validator==2.1.0
+
+# Для работы с датами
+python-multipart==0.0.6
