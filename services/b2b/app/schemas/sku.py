@@ -1,5 +1,5 @@
 # app/schemas/sku.py
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, computed_field
 from typing import Optional
 from datetime import datetime
 
@@ -11,13 +11,15 @@ from app.schemas.validators import (
 )
 
 
+
 class SKUBase(BaseModel):
     seller_sku: Optional[str] = Field(None, max_length=100)
     barcode: Optional[str] = Field(None, max_length=100)
     name: str = Field(..., max_length=500)
     price: int = Field(..., gt=0, description="Цена в копейках")
     compare_at_price: Optional[int] = Field(None, gt=0)
-    quantity: int = Field(0, ge=0)
+    quantity: int = Field(0, ge=0, description="Физический остаток")
+    reserved_quantity: int = Field(0, ge=0, description="Зарезервировано")  # ← добавить
     is_active: bool = True
 
 
@@ -105,6 +107,12 @@ class SKU(SKUBase):
     main_image_id: Optional[int] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
-
+    
+    @computed_field
+    @property
+    def activeQuantity(self) -> int:
+        """Доступно для продажи (по спецификации)"""
+        return self.quantity - self.reserved_quantity
+    
     class Config:
         from_attributes = True

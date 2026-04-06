@@ -8,14 +8,14 @@ from app.models.product import Product
 
 from app.schemas.product import (
     Product as ProductSchema,
-    ProductCreateWithValidation,
-    ProductUpdateWithValidation
+    ProductCreate,
+    ProductUpdate
 )
 
-router = APIRouter(prefix="/products", tags=["Товары"])
+router = APIRouter()
 
 @router.post("/", response_model=ProductSchema, status_code=status.HTTP_201_CREATED)
-def create_product(product: ProductCreateWithValidation, db: Session = Depends(get_db)):
+def create_product(product: ProductCreate, db: Session = Depends(get_db)):
     """
     Создать новый товар.
     - **title**: название товара
@@ -31,7 +31,7 @@ def create_product(product: ProductCreateWithValidation, db: Session = Depends(g
             detail="Товар с таким slug уже существует"
         )
     
-    db_product = Product(**product.dict(), status="DRAFT")
+    db_product = Product(**product.dict(), status="CREATED")
     db.add(db_product)
     db.commit()
     db.refresh(db_product)
@@ -78,7 +78,7 @@ def get_product(product_id: int, db: Session = Depends(get_db)):
 @router.put("/{product_id}", response_model=ProductSchema)
 def update_product(
     product_id: int,
-    product_update: ProductUpdateWithValidation,
+    product_update: ProductUpdate,
     db: Session = Depends(get_db)
 ):
     """Обновить товар"""
@@ -94,7 +94,7 @@ def update_product(
     
     # Если обновили важные поля - отправляем на модерацию
     if product_update.dict(exclude_unset=True):
-        product.status = "DRAFT"
+        product.status = "ON_MODERATION"
     
     db.commit()
     db.refresh(product)

@@ -13,7 +13,7 @@ from app.schemas.seller import (
     SellerUpdateWithValidation
 )
 
-router = APIRouter(prefix="/sellers", tags=["Продавцы"])
+router = APIRouter()
 
 @router.post("/", response_model=SellerSchema, status_code=status.HTTP_201_CREATED)
 def create_seller(seller: SellerCreateWithValidation, db: Session = Depends(get_db)):
@@ -31,7 +31,7 @@ def create_seller(seller: SellerCreateWithValidation, db: Session = Depends(get_
             detail="Продавец с таким ИНН уже существует"
         )
     
-    db_seller = Seller(**seller.dict(), status="PENDING")
+    db_seller = Seller(**seller.model_dump(), status="PENDING")
     db.add(db_seller)
     db.commit()
     db.refresh(db_seller)

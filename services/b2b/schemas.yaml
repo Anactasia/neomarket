@@ -1,0 +1,160 @@
+# Добавьте это в конец файла shared/schemas.yaml
+
+    # ========== ДОПОЛНИТЕЛЬНЫЕ СХЕМЫ ==========
+    
+    Category:
+      type: object
+      description: Полная категория с деревом
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        slug:
+          type: string
+        parent_id:
+          type: integer
+          nullable: true
+        children:
+          type: array
+          items:
+            $ref: "#/components/schemas/Category"
+        is_active:
+          type: boolean
+          default: true
+    
+    Pagination:
+      type: object
+      properties:
+        limit:
+          type: integer
+        offset:
+          type: integer
+        total:
+          type: integer
+    
+    Error:
+      type: object
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+    
+    # ========== ДЛЯ РАБОТЫ С НАКЛАДНЫМИ ==========
+    
+    InvoiceItem:
+      type: object
+      properties:
+        sku_id:
+          type: integer
+        quantity:
+          type: integer
+        accepted_quantity:
+          type: integer
+          nullable: true
+    
+    InvoiceFull:
+      type: object
+      description: Полная информация о накладной
+      properties:
+        id:
+          type: integer
+        seller_id:
+          type: string
+          format: uuid
+        invoice_number:
+          type: string
+        status:
+          type: string
+          enum: [CREATED, ACCEPTED, REJECTED, CANCELLED]
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/InvoiceItem"
+        created_at:
+          type: string
+          format: date-time
+        accepted_at:
+          type: string
+          format: date-time
+          nullable: true
+    
+    # ========== ДЛЯ РЕЗЕРВИРОВАНИЯ (B2C → B2B) ==========
+    
+    ReserveItem:
+      type: object
+      required:
+        - sku_id
+        - quantity
+      properties:
+        sku_id:
+          type: integer
+        quantity:
+          type: integer
+          minimum: 1
+    
+    ReserveRequest:
+      type: object
+      required:
+        - items
+        - order_id
+      properties:
+        items:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/ReserveItem"
+        order_id:
+          type: string
+          format: uuid
+        ttl_seconds:
+          type: integer
+          minimum: 60
+          maximum: 3600
+          default: 900
+    
+    ReserveResult:
+      type: object
+      properties:
+        sku_id:
+          type: integer
+        requested:
+          type: integer
+        reserved:
+          type: integer
+        available:
+          type: integer
+    
+    ReserveResponse:
+      type: object
+      properties:
+        reservation_id:
+          type: string
+          format: uuid
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReserveResult"
+    
+    # ========== ДЛЯ СВЯЗИ С MODERATION ==========
+    
+    ModerationCallback:
+      type: object
+      required:
+        - product_id
+        - decision
+      properties:
+        product_id:
+          type: integer
+        decision:
+          type: string
+          enum: [APPROVED, DECLINED]
+        blocking_reason_id:
+          type: integer
+          nullable: true
+        comment:
+          type: string
+          maxLength: 1000

@@ -15,12 +15,11 @@ class Category(BaseModel):
     image_url = Column(String(500))
     is_active = Column(Boolean, default=True)
     sort_order = Column(Integer, default=0)
+    is_restricted = Column(Boolean, default=False)  # (для 18+ контента)
     
-    
+    # Relationships
     parent = relationship("Category", remote_side=[id], backref="children")
     products = relationship("Product", back_populates="category")
-    
-    
     characteristics = relationship(
         "CategoryCharacteristic",
         back_populates="category",
