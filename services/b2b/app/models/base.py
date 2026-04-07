@@ -22,13 +22,11 @@ class GUID(TypeDecorator):
     def process_bind_param(self, value, dialect):
         if value is None:
             return value
-        elif dialect.name == 'postgresql':
-            return str(value)
-        else:
-            if not isinstance(value, uuid.UUID):
-                return uuid.UUID(value).hex
-            else:
-                return value.hex
+        if dialect.name == 'postgresql':
+            return value
+        if not isinstance(value, uuid.UUID):
+            return uuid.UUID(value).hex
+        return value.hex
 
     def process_result_value(self, value, dialect):
         if value is None:
