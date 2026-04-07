@@ -1,13 +1,14 @@
 # app/models/invoice.py
 from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, DECIMAL, UniqueConstraint 
 from sqlalchemy.orm import relationship
-from app.models.base import BaseModel
+from app.models.base import BaseModel, GUID
+import uuid
 
 class Invoice(BaseModel):
     __tablename__ = "invoices"
     
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    seller_id = Column(String(36), ForeignKey("sellers.id"))
+    id = Column(GUID, primary_key=True, default=uuid.uuid4)
+    seller_id = Column(GUID, ForeignKey("sellers.id", ondelete="CASCADE"), nullable=False)
     invoice_number = Column(String(50), nullable=False)
     status = Column(String(20), default="CREATED")  # CREATED, ACCEPTED, REJECTED, CANCELLED
     warehouse_id = Column(Integer, nullable=True)
@@ -23,9 +24,9 @@ class Invoice(BaseModel):
 class InvoiceItem(BaseModel):
     __tablename__ = "invoice_items"
     
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    invoice_id = Column(Integer, ForeignKey("invoices.id", ondelete="CASCADE"))
-    sku_id = Column(Integer, ForeignKey("skus.id"))
+    id = Column(GUID, primary_key=True, default=uuid.uuid4)
+    invoice_id = Column(GUID, ForeignKey("invoices.id", ondelete="CASCADE"), nullable=False)    
+    sku_id = Column(GUID, ForeignKey("skus.id"), nullable=False) 
     quantity = Column(Integer, nullable=False)
     price = Column(Integer) 
     accepted_quantity = Column(Integer)

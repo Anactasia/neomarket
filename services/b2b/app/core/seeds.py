@@ -48,7 +48,7 @@ def seed_telegram_market():
         
         def create_seller(name, inn):
             s = Seller(
-                id=str(uuid.uuid4()),
+                id=uuid.uuid4(),
                 company_name=name,
                 inn=inn,
                 status="ACTIVE",

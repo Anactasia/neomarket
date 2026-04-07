@@ -9,7 +9,7 @@ class TestInvoices:
             "seller_id": str(test_seller.id),
             "invoice_number": "INV-001",
             "items": [
-                {"sku_id": test_sku.id, "quantity": 10}
+                {"sku_id": str(test_sku.id), "quantity": 10}
             ]
         })
         assert response.status_code == 201
@@ -35,7 +35,7 @@ class TestInvoices:
         create_response = client.post("/api/v1/invoices/", json={
             "seller_id": str(test_seller.id),
             "invoice_number": "INV-002",
-            "items": [{"sku_id": test_sku.id, "quantity": 5}]
+            "items": [{"sku_id": str(test_sku.id), "quantity": 5}]
         })
         invoice_id = create_response.json()["id"]
         
@@ -51,7 +51,7 @@ class TestInvoices:
         create_response = client.post("/api/v1/invoices/", json={
             "seller_id": str(test_seller.id),
             "invoice_number": "INV-003",
-            "items": [{"sku_id": test_sku.id, "quantity": 20}]
+            "items": [{"sku_id": str(test_sku.id), "quantity": 20}]
         })
         invoice_id = create_response.json()["id"]
         

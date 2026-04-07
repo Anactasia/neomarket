@@ -15,7 +15,7 @@ router = APIRouter()
 def create_invoice(invoice: InvoiceCreate, db: Session = Depends(get_db)):
 
     db_invoice = Invoice(
-        seller_id=str(invoice.seller_id),
+        seller_id=invoice.seller_id,
         invoice_number=invoice.invoice_number,
         warehouse_id=invoice.warehouse_id,
         status="CREATED"
@@ -50,13 +50,13 @@ def get_invoices(
     """
     query = db.query(Invoice)
     if seller_id:
-        query = query.filter(Invoice.seller_id == str(seller_id))
+        query = query.filter(Invoice.seller_id == seller_id)
     
     invoices = query.offset(skip).limit(limit).all()
     return invoices
 
 @router.get("/{invoice_id}", response_model=InvoiceSchema)
-def get_invoice(invoice_id: int, db: Session = Depends(get_db)):
+def get_invoice(invoice_id: UUID, db: Session = Depends(get_db)):
     """Получить накладную по ID"""
     invoice = db.query(Invoice).filter(Invoice.id == invoice_id).first()
     if not invoice:
@@ -67,7 +67,7 @@ def get_invoice(invoice_id: int, db: Session = Depends(get_db)):
     return invoice
 
 @router.post("/{invoice_id}/accept", response_model=InvoiceSchema)
-def accept_invoice(invoice_id: int, db: Session = Depends(get_db)):
+def accept_invoice(invoice_id: UUID, db: Session = Depends(get_db)):
 
     invoice = db.query(Invoice).filter(Invoice.id == invoice_id).first()
     if not invoice:

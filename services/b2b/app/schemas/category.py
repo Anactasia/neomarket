@@ -2,12 +2,13 @@
 from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime
+from uuid import UUID
 
 class CategoryBase(BaseModel):
     name: str = Field(..., max_length=255)
     slug: str = Field(..., max_length=255)
     description: Optional[str] = None
-    parent_id: Optional[int] = None
+    parent_id: Optional[UUID] = None
     image_url: Optional[str] = None
     is_active: bool = True
     sort_order: int = 0
@@ -25,7 +26,7 @@ class CategoryUpdate(BaseModel):
     is_restricted: Optional[bool] = None  
 
 class Category(CategoryBase):
-    id: int
+    id: UUID
     level: int
     created_at: Optional[datetime] = None  # ← ИЗМЕНИТЬ: сделать Optional
     updated_at: Optional[datetime] = None

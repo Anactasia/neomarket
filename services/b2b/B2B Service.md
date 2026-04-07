@@ -105,11 +105,11 @@ python
 
 python
 
-- id: int
+- id: UUID
 - name: str
 - slug: str (уникальный)
 - description: str
-- parent\_id: int (ссылка на родителя)
+- parent\_id: UUID (ссылка на родителя)
 - level: int
 - image\_url: str
 - is\_active: bool
@@ -121,13 +121,13 @@ python
 
 python
 
-- id: int
+- id: UUID
 - seller\_id: UUID
-- category\_id: int
+- category\_id: UUID
 - title: str
 - description: str
 - slug: str (уникальный)
-- main\_image\_id: int
+- main\_image\_id: UUID
 - meta\_title: str
 - meta\_description: str
 - meta\_keywords: str
@@ -141,8 +141,8 @@ python
 
 python
 
-- id: int
-- product\_id: int
+- id: UUID
+- product\_id: UUID
 - seller\_sku: str
 - barcode: str
 - name: str
@@ -150,7 +150,7 @@ python
 - compare\_at\_price: int
 - quantity: int
 - is\_active: bool
-- main\_image\_id: int
+- main\_image\_id: UUID
 - created\_at: DateTime
 - updated\_at: DateTime
 
@@ -158,7 +158,7 @@ python
 
 python
 
-- id: int
+- id: UUID
 - name: str
 - slug: str (уникальный)
 - type: str (string/integer/float/boolean)
@@ -170,11 +170,11 @@ python
 
 python
 
-- id: int
+- id: UUID
 - seller\_id: UUID
 - invoice\_number: str
 - status: str (CREATED/ACCEPTED/REJECTED/CANCELLED)
-- warehouse\_id: int
+- warehouse\_id: UUID
 - received\_at: DateTime
 - created\_at: DateTime
 - updated\_at: DateTime
@@ -183,8 +183,8 @@ python
 
 python
 
-- id: int
-- product\_id: int
+- id: UUID
+- product\_id: UUID
 - old\_status: str
 - new\_status: str
 - changed\_by: UUID

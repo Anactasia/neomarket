@@ -6,11 +6,12 @@
 from pydantic import BaseModel
 from typing import Optional, List, Any
 from datetime import datetime
+from uuid import UUID
 
 
 class CategoryRef(BaseModel):
     """Ссылка на категорию (для Product)"""
-    id: int
+    id: UUID
     name: str
 
 
@@ -42,7 +43,7 @@ class Error(BaseModel):
 
 class SKUInProduct(BaseModel):
     """SKU внутри Product (для ответа)"""
-    id: int
+    id: UUID
     name: str
     price: int
     activeQuantity: int  # quantity - reserved_quantity

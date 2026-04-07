@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
+from uuid import UUID
 
 from app.database import get_db
 from app.models.category import Category
@@ -43,7 +44,7 @@ def create_category(
 
 @router.put("/{category_id}", response_model=CategorySchema)
 def update_category(
-    category_id: int,
+    category_id: UUID,
     category_update: CategoryUpdate,
     db: Session = Depends(get_db)
 ):
@@ -65,7 +66,7 @@ def update_category(
 
 @router.delete("/{category_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_category(
-    category_id: int,
+    category_id: UUID,
     db: Session = Depends(get_db)
 ):
     """[ADMIN ONLY] Удалить категорию"""

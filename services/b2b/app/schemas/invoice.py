@@ -5,16 +5,16 @@ from datetime import datetime
 from uuid import UUID
 
 class InvoiceItemBase(BaseModel):
-    sku_id: int
-    quantity: int = Field(..., gt=0)
+    sku_id: UUID
+    quantity: int = Field(...)
     price: Optional[int] = None
 
 class InvoiceItemCreate(InvoiceItemBase):
     pass
 
 class InvoiceItem(InvoiceItemBase):
-    id: int
-    invoice_id: int
+    id: UUID
+    invoice_id: UUID
     accepted_quantity: Optional[int] = None
     created_at: datetime
 
@@ -30,7 +30,7 @@ class InvoiceCreate(InvoiceBase):
     items: List[InvoiceItemCreate]
 
 class Invoice(InvoiceBase):
-    id: int
+    id: UUID
     seller_id: UUID
     status: str
     received_at: Optional[datetime] = None

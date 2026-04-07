@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from datetime import datetime
 from app.database import get_db
 from app.models.product import Product
+from uuid import UUID
 
 router = APIRouter()
 

@@ -1,13 +1,13 @@
 # app/models/seller.py
 from sqlalchemy import Column, String, DECIMAL, Boolean, DateTime
 from sqlalchemy.orm import relationship
-from app.models.base import BaseModel
+from app.models.base import BaseModel, GUID
 import uuid
 
 class Seller(BaseModel):
     __tablename__ = "sellers"
     
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    id = Column(GUID, primary_key=True, default=uuid.uuid4)
     company_name = Column(String(255), nullable=False)
     inn = Column(String(12), unique=True, nullable=False)
     kpp = Column(String(9))

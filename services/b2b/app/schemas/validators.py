@@ -9,6 +9,7 @@
 
 import re
 from typing import Optional
+from uuid import UUID
 
 
 # ----- Seller validators -----
