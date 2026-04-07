@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
+from uuid import UUID
 
 from app.database import get_db
 from app.models.sku import SKU
@@ -31,7 +32,7 @@ def create_sku(sku: SKUCreateWithValidation, db: Session = Depends(get_db)):
             detail="Product not found"
         )
 
-    db_sku = SKU(**sku.dict())
+    db_sku = SKU(**sku.model_dump())
 
     db.add(db_sku)
     db.commit()
@@ -43,7 +44,7 @@ def create_sku(sku: SKUCreateWithValidation, db: Session = Depends(get_db)):
 def get_skus(
     skip: int = 0,
     limit: int = 100,
-    product_id: int = None,
+    product_id: UUID = None,
     db: Session = Depends(get_db)
 ):
     """
@@ -58,7 +59,7 @@ def get_skus(
     return skus
 
 @router.get("/{sku_id}", response_model=SKUSchema)
-def get_sku(sku_id: int, db: Session = Depends(get_db)):
+def get_sku(sku_id: UUID, db: Session = Depends(get_db)):
     """Получить SKU по ID"""
     sku = db.query(SKU).filter(SKU.id == sku_id).first()
     if not sku:
@@ -70,7 +71,7 @@ def get_sku(sku_id: int, db: Session = Depends(get_db)):
 
 @router.put("/{sku_id}", response_model=SKUSchema)
 def update_sku(
-    sku_id: int,
+    sku_id: UUID,
     sku_update: SKUUpdateWithValidation,
     db: Session = Depends(get_db)
 ):
@@ -82,7 +83,7 @@ def update_sku(
             detail="SKU не найден"
         )
     
-    for field, value in sku_update.dict(exclude_unset=True).items():
+    for field, value in sku_update.model_dump(exclude_unset=True).items():
         setattr(sku, field, value)
     
     db.commit()
@@ -90,7 +91,7 @@ def update_sku(
     return sku
 
 @router.delete("/{sku_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_sku(sku_id: int, db: Session = Depends(get_db)):
+def delete_sku(sku_id: UUID, db: Session = Depends(get_db)):
     """Удалить SKU"""
     sku = db.query(SKU).filter(SKU.id == sku_id).first()
     if not sku:
@@ -109,7 +110,7 @@ def delete_sku(sku_id: int, db: Session = Depends(get_db)):
 
 @router.put("/{sku_id}/quantity", response_model=SKUSchema)
 def update_sku_quantity(
-    sku_id: int,
+    sku_id: UUID,
     quantity: int,
     db: Session = Depends(get_db)
 ):

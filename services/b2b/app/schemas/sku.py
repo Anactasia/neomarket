@@ -2,6 +2,7 @@
 from pydantic import BaseModel, Field, field_validator, computed_field
 from typing import Optional
 from datetime import datetime
+from uuid import UUID
 
 from app.schemas.validators import (
     validate_price,
@@ -16,8 +17,8 @@ class SKUBase(BaseModel):
     seller_sku: Optional[str] = Field(None, max_length=100)
     barcode: Optional[str] = Field(None, max_length=100)
     name: str = Field(..., max_length=500)
-    price: int = Field(..., gt=0, description="Цена в копейках")
-    compare_at_price: Optional[int] = Field(None, gt=0)
+    price: int = Field(..., description="Цена в копейках")
+    compare_at_price: Optional[int] = Field(None)
     quantity: int = Field(0, ge=0, description="Физический остаток")
     reserved_quantity: int = Field(0, ge=0, description="Зарезервировано")  # ← добавить
     is_active: bool = True
@@ -25,7 +26,7 @@ class SKUBase(BaseModel):
 
 # ----- FOR CREATE -----
 class SKUCreate(SKUBase):
-    product_id: int
+    product_id: UUID
 
 
 class SKUCreateWithValidation(SKUCreate):
@@ -59,7 +60,7 @@ class SKUUpdate(BaseModel):
     seller_sku: Optional[str] = Field(None, max_length=100)
     barcode: Optional[str] = Field(None, max_length=100)
     name: Optional[str] = Field(None, max_length=500)
-    price: Optional[int] = Field(None, gt=0)
+    price: Optional[int] = Field(None)
     compare_at_price: Optional[int] = None
     quantity: Optional[int] = Field(None, ge=0)
     is_active: Optional[bool] = None
@@ -102,9 +103,9 @@ class SKUUpdateWithValidation(SKUUpdate):
 
 # ----- FOR RESPONSE -----
 class SKU(SKUBase):
-    id: int
-    product_id: int
-    main_image_id: Optional[int] = None
+    id: UUID
+    product_id: UUID
+    main_image_id: Optional[UUID] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
     

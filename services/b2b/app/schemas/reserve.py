@@ -9,8 +9,8 @@ from uuid import UUID
 
 
 class ReserveItem(BaseModel):
-    sku_id: int
-    quantity: int = Field(..., ge=1)
+    sku_id: UUID
+    quantity: int = Field(...)
 
 
 class ReserveRequest(BaseModel):
@@ -22,7 +22,7 @@ class ReserveRequest(BaseModel):
 
 class ReserveResult(BaseModel):
     """Результат по одному SKU"""
-    sku_id: int
+    sku_id: UUID
     requested: int
     reserved: int
     available: int

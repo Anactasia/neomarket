@@ -56,7 +56,7 @@ def get_seller(seller_id: UUID, db: Session = Depends(get_db)):
     """
     Получить продавца по ID.
     """
-    seller = db.query(Seller).filter(Seller.id == str(seller_id)).first()
+    seller = db.query(Seller).filter(Seller.id == seller_id).first()
     if not seller:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -73,14 +73,14 @@ def update_seller(
     """
     Обновить данные продавца.
     """
-    seller = db.query(Seller).filter(Seller.id == str(seller_id)).first()
+    seller = db.query(Seller).filter(Seller.id == seller_id).first()
     if not seller:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Продавец не найден"
         )
     
-    for field, value in seller_update.dict(exclude_unset=True).items():
+    for field, value in seller_update.model_dump(exclude_unset=True).items():
         setattr(seller, field, value)
     
     db.commit()

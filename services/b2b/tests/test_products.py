@@ -8,7 +8,7 @@ class TestProducts:
         response = client.post("/api/v1/products/", json={
             "title": "New Product",
             "slug": "new-product",
-            "category_id": test_category.id,
+            "category_id": str(test_category.id),
             "seller_id": str(test_seller.id),
             "description": "Test description"
         })
@@ -22,7 +22,7 @@ class TestProducts:
         response = client.post("/api/v1/products/", json={
             "title": "Another Product",
             "slug": test_product.slug,  # тот же slug
-            "category_id": test_product.category_id,
+            "category_id": str(test_product.category_id),
             "seller_id": str(test_product.seller_id)
         })
         assert response.status_code == 400
@@ -32,7 +32,7 @@ class TestProducts:
         response = client.post("/api/v1/products/", json={
             "title": "Invalid Product",
             "slug": "invalid-product",
-            "category_id": 99999,  # не существует
+            "category_id": "550e8400-e29b-41d4-a716-446655449999",  # валидный UUID, но не существует
             "seller_id": str(test_seller.id)
         })
         assert response.status_code == 404
@@ -61,7 +61,7 @@ class TestProducts:
     
     def test_get_product_not_found(self, client):
         """Ошибка при несуществующем товаре"""
-        response = client.get("/api/v1/products/99999")
+        response = client.get("/api/v1/products/550e8400-e29b-41d4-a716-446655449999")
         assert response.status_code == 404
     
     def test_update_product(self, client, test_product):
@@ -85,7 +85,7 @@ class TestProducts:
         response = client.post("/api/v1/products/", json={
             "title": "A",  # слишком короткое
             "slug": "Invalid Slug!",  # недопустимые символы
-            "category_id": 0,  # невалидный ID
+            "category_id": "not-a-uuid",
             "seller_id": str(test_seller.id)
         })
         assert response.status_code == 422  # Validation error

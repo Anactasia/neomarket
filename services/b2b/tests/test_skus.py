@@ -6,7 +6,7 @@ class TestSKUs:
     def test_create_sku_success(self, client, test_product):
         """Успешное создание SKU"""
         response = client.post("/api/v1/skus/", json={
-            "product_id": test_product.id,
+            "product_id": str(test_product.id),
             "name": "256GB Black",
             "price": 9990000,
             "quantity": 50
@@ -20,7 +20,7 @@ class TestSKUs:
     def test_create_sku_invalid_product(self, client):
         """Ошибка при несуществующем товаре"""
         response = client.post("/api/v1/skus/", json={
-            "product_id": 99999,
+            "product_id": "550e8400-e29b-41d4-a716-446655449999",
             "name": "Test SKU",
             "price": 10000
         })
@@ -39,7 +39,7 @@ class TestSKUs:
         assert response.status_code == 200
         data = response.json()
         assert len(data) >= 1
-        assert data[0]["product_id"] == test_product.id
+        assert data[0]["product_id"] == str(test_product.id)
     
     def test_get_sku_by_id(self, client, test_sku):
         """Получение SKU по ID"""

@@ -2,6 +2,7 @@
 from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime
+from uuid import UUID
 
 class CharacteristicBase(BaseModel):
     name: str = Field(..., max_length=100)
@@ -13,7 +14,7 @@ class CharacteristicCreate(CharacteristicBase):
     pass
 
 class Characteristic(CharacteristicBase):
-    id: int
+    id: UUID
     created_at: datetime
     updated_at: Optional[datetime] = None
 

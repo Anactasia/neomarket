@@ -21,7 +21,7 @@ class ProductBase(BaseModel):
     title: str = Field(..., min_length=1, max_length=500)
     description: Optional[str] = None
     slug: str = Field(..., max_length=500)
-    category_id: int = Field(..., gt=0)
+    category_id: UUID
     meta_title: Optional[str] = Field(None, max_length=500)
     meta_description: Optional[str] = None
     meta_keywords: Optional[str] = None
@@ -48,7 +48,7 @@ class ProductCreate(ProductBase):
 class ProductUpdate(BaseModel):
     title: Optional[str] = Field(None, min_length=1, max_length=500)
     description: Optional[str] = None
-    category_id: Optional[int] = Field(None, gt=0)
+    category_id: Optional[UUID] = None 
     characteristics: Optional[List[CharacteristicValue]] = None
     meta_title: Optional[str] = Field(None, max_length=500)
     meta_description: Optional[str] = None
@@ -66,7 +66,7 @@ class ProductUpdate(BaseModel):
 
 # ----- FOR RESPONSE -----
 class ProductResponse(BaseModel):
-    id: int
+    id: UUID
     title: str
     description: Optional[str] = None
     status: ProductStatus
@@ -83,10 +83,10 @@ class ProductResponse(BaseModel):
 
 
 class Product(ProductBase):
-    id: int
+    id: UUID
     seller_id: UUID
     status: str
-    main_image_id: Optional[int] = None
+    main_image_id: Optional[UUID] = None
     published_at: Optional[datetime] = None
     created_at: datetime
     updated_at: Optional[datetime] = None

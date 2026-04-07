@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional
+from uuid import UUID
 
 from app.database import get_db
 from app.models.category import Category
@@ -60,7 +61,7 @@ def get_category_tree(
 
 @router.get("/{category_id}", response_model=CategorySchema)
 def get_category(
-    category_id: int,
+    category_id: UUID,
     db: Session = Depends(get_db)
 ):
     """
@@ -86,11 +87,11 @@ def get_category(
 #     pass
 
 # @router.put("/{category_id}", response_model=CategorySchema)
-# def update_category(category_id: int, category_update: CategoryUpdate, db: Session = Depends(get_db)):
+# def update_category(category_id: UUID, category_update: CategoryUpdate, db: Session = Depends(get_db)):
 #     """[ADMIN ONLY] Обновить категорию"""
 #     pass
 
 # @router.delete("/{category_id}", status_code=status.HTTP_204_NO_CONTENT)
-# def delete_category(category_id: int, db: Session = Depends(get_db)):
+# def delete_category(category_id: UUID, db: Session = Depends(get_db)):
 #     """[ADMIN ONLY] Удалить категорию"""
 #     pass
