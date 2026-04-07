@@ -13,18 +13,23 @@
 
 ### 1. Клонировать репозиторий
 ```bash
+# 1. Клонировать репозиторий
 git clone <REPO_URL>
 cd services/b2b
-```
-### 2. Запустить с помощью Docker (рекомендуется)
-```bash
-# Поднять базу данных и pgAdmin
+
+# 2. Запустить базу данных
 docker-compose up -d postgres pgadmin
 
-# Применить миграции
+# 3. Дождаться готовности PostgreSQL
+sleep 5
+
+# 4. Очистить alembic_version (если есть проблемы с ревизиями)
+docker-compose exec postgres psql -U postgres -d neomarket_b2b -c "DROP TABLE IF EXISTS alembic_version CASCADE;"
+
+# 5. Применить миграции с нуля
 docker-compose run --rm b2b-service alembic upgrade head
 
-# Запустить сервис
+# 6. Запустить сервис
 docker-compose up b2b-service
 ```
 
