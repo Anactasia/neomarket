@@ -1,6 +1,14 @@
 # app/models/product.py
 from sqlalchemy import Column, Integer, String, Text, ForeignKey, Boolean, DateTime, DECIMAL
 from sqlalchemy.orm import relationship
+from sqlalchemy.dialects.postgresql import JSON
+from app.models.base import BaseModel, GUID
+import uuid
+
+# app/models/product.py
+from sqlalchemy import Column, Integer, String, Text, ForeignKey, Boolean, DateTime, DECIMAL
+from sqlalchemy.orm import relationship
+from sqlalchemy.dialects.postgresql import JSON
 from app.models.base import BaseModel, GUID
 import uuid
 
@@ -12,7 +20,7 @@ class Product(BaseModel):
     category_id = Column(GUID, ForeignKey("categories.id", ondelete="CASCADE"), nullable=False)
     title = Column(String(500), nullable=False)
     description = Column(Text)
-    slug = Column(String(500), unique=True, nullable=False)
+    # slug - УДАЛЁН
     
     main_image_id = Column(
         GUID,
@@ -20,12 +28,12 @@ class Product(BaseModel):
         nullable=True
     )
     
-    # SEO
-    meta_title = Column(String(500))
-    meta_description = Column(Text)
-    meta_keywords = Column(Text)
+    # SEO поля - УДАЛЁНЫ
+    # meta_title = Column(String(500))
+    # meta_description = Column(Text)
+    # meta_keywords = Column(Text)
     
-    status = Column(String(20), nullable=False, default="DRAFT")
+    status = Column(String(20), nullable=False, default="CREATED")  # ← изменил default с DRAFT на CREATED
     moderation_comment = Column(Text)
     
     published_at = Column(DateTime(timezone=True), nullable=True)
@@ -36,6 +44,9 @@ class Product(BaseModel):
     images = relationship("ProductImage", back_populates="product", cascade="all, delete-orphan", foreign_keys="ProductImage.product_id")
     characteristics = relationship("ProductCharacteristic", back_populates="product", cascade="all, delete-orphan")
     main_image = relationship("ProductImage", foreign_keys=[main_image_id])
+    characteristics_json = Column(JSON, default=list)
+    deleted = Column(Boolean, default=False, nullable=False)
+    blocked = Column(Boolean, default=False, nullable=False)
 
 class ProductImage(BaseModel):
     __tablename__ = "product_images"

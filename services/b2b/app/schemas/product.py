@@ -1,95 +1,83 @@
-# app/schemas/product.py
 from pydantic import BaseModel, Field, field_validator
-from typing import Optional, List
+from typing import List, Optional
 from datetime import datetime
 from uuid import UUID
 from enum import Enum
 
-from app.schemas.common import CategoryRef, Image, CharacteristicValue, SKUInProduct
-from app.schemas.validators import validate_slug, validate_title  # ← импорт валидаторов
+from app.schemas.common import (
+    CategoryRef, 
+    ImageResponse, 
+    CharacteristicValue, 
+    SKUInProduct,
+    ProductImageCreate,
+    ProductImageResponse
+)
 
 
 class ProductStatus(str, Enum):
-    """Статусы товара по спецификации"""
     CREATED = "CREATED"
     ON_MODERATION = "ON_MODERATION"
     MODERATED = "MODERATED"
     BLOCKED = "BLOCKED"
+    HARD_BLOCKED = "HARD_BLOCKED"
 
 
-class ProductBase(BaseModel):
-    title: str = Field(..., min_length=1, max_length=500)
-    description: Optional[str] = None
-    slug: str = Field(..., max_length=500)
+class ProductCreate(BaseModel):
+    title: str = Field(..., min_length=1, max_length=255)
+    description: str = Field(..., min_length=1, max_length=5000)
     category_id: UUID
-    meta_title: Optional[str] = Field(None, max_length=500)
-    meta_description: Optional[str] = None
-    meta_keywords: Optional[str] = None
-
-
-# ----- FOR CREATE -----
-class ProductCreate(ProductBase):
-    seller_id: UUID
-    characteristics: List[CharacteristicValue] = []
+    images: List[ProductImageCreate] = Field(..., min_length=1)
+    characteristics: List[CharacteristicValue] = Field(default_factory=list)
     
-    # ← ПОДКЛЮЧАЕМ ВАЛИДАТОРЫ
     @field_validator('title')
     @classmethod
     def validate_title(cls, v: str) -> str:
-        return validate_title(v)
+        if not v or not v.strip():
+            raise ValueError('title is required')
+        return v.strip()
     
-    @field_validator('slug')
+    @field_validator('description')
     @classmethod
-    def validate_slug(cls, v: str) -> str:
-        return validate_slug(v)
+    def validate_description(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError('description is required')
+        return v.strip()
 
 
-# ----- FOR UPDATE -----
-class ProductUpdate(BaseModel):
-    title: Optional[str] = Field(None, min_length=1, max_length=500)
-    description: Optional[str] = None
-    category_id: Optional[UUID] = None 
-    characteristics: Optional[List[CharacteristicValue]] = None
-    meta_title: Optional[str] = Field(None, max_length=500)
-    meta_description: Optional[str] = None
-    meta_keywords: Optional[str] = None
-    
-    # ← ПОДКЛЮЧАЕМ ВАЛИДАТОРЫ (с проверкой что поле передано)
-    @field_validator('title')
-    @classmethod
-    def validate_title(cls, v: Optional[str]) -> Optional[str]:
-        if v is not None:
-            return validate_title(v)
-        return v
-    
-
-
-# ----- FOR RESPONSE -----
 class ProductResponse(BaseModel):
     id: UUID
     title: str
-    description: Optional[str] = None
+    description: str
     status: ProductStatus
+    deleted: bool = False
+    blocked: bool = False
     category: CategoryRef
-    images: List[Image] = []
-    characteristics: List[CharacteristicValue] = []
-    skus: List[SKUInProduct] = []
+    images: List[ImageResponse] = Field(default_factory=list)
+    characteristics: List[CharacteristicValue] = Field(default_factory=list)
+    skus: List[SKUInProduct] = Field(default_factory=list)
     created_at: datetime
     updated_at: Optional[datetime] = None
-    published_at: Optional[datetime] = None
     
     class Config:
         from_attributes = True
 
 
-class Product(ProductBase):
+class ProductUpdate(BaseModel):
+    title: Optional[str] = Field(None, min_length=1, max_length=255)
+    description: Optional[str] = None
+    category_id: Optional[UUID] = None
+    characteristics: Optional[List[CharacteristicValue]] = None
+
+
+class Product(BaseModel):
     id: UUID
     seller_id: UUID
     status: str
-    main_image_id: Optional[UUID] = None
-    published_at: Optional[datetime] = None
+    title: str
+    description: Optional[str] = None
+    category_id: UUID
     created_at: datetime
     updated_at: Optional[datetime] = None
-
+    
     class Config:
         from_attributes = True
