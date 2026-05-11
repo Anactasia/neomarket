@@ -10,7 +10,8 @@ from app.schemas.common import (
     CharacteristicValue, 
     SKUInProduct,
     ProductImageCreate,
-    ProductImageResponse
+    ProductImageResponse,
+    CharacteristicValueResponse
 )
 
 
@@ -46,17 +47,20 @@ class ProductCreate(BaseModel):
 
 class ProductResponse(BaseModel):
     id: UUID
+    seller_id: UUID                              # ← добавить
+    category_id: UUID                            # ← добавить (вместо category)
     title: str
-    description: str
+    description: Optional[str]
     status: ProductStatus
-    deleted: bool = False
-    blocked: bool = False
-    category: CategoryRef
-    images: List[ImageResponse] = Field(default_factory=list)
-    characteristics: List[CharacteristicValue] = Field(default_factory=list)
-    skus: List[SKUInProduct] = Field(default_factory=list)
+    images: List[ProductImageResponse]           # ← уже с id
+    characteristics: List[CharacteristicValueResponse]  # ← с id
+    skus: List[SKUInProduct] = []
     created_at: datetime
-    updated_at: Optional[datetime] = None
+    updated_at: Optional[datetime]
+    
+    # deleted: bool
+    # blocked: bool
+    # category: CategoryRef
     
     class Config:
         from_attributes = True

@@ -2,7 +2,7 @@
 Общие Pydantic схемы, переиспользуемые между модулями
 """
 from pydantic import BaseModel, Field
-from typing import Optional, List, Any
+from typing import Optional, List
 from datetime import datetime
 from uuid import UUID
 
@@ -14,19 +14,27 @@ class CategoryRef(BaseModel):
 
 
 class Image(BaseModel):
-    """Изображение товара"""
+    """Изображение товара (для запроса)"""
     url: str
     ordering: int = 0
 
 
 class ImageResponse(BaseModel):
-    """Ответ с изображением (для ProductResponse)"""
+    """Ответ с изображением (по общей спецификации)"""
+    id: UUID                              # ← ДОБАВИТЬ id
     url: str
     ordering: int = 0
 
 
 class CharacteristicValue(BaseModel):
-    """Характеристика товара или SKU (свободные name/value по канону)"""
+    """Характеристика для запроса (свободные name/value)"""
+    name: str = Field(..., max_length=255)
+    value: str = Field(..., max_length=1000)
+
+
+class CharacteristicValueResponse(BaseModel):
+    """Характеристика в ответе (по общей спецификации — с id)"""
+    id: UUID
     name: str = Field(..., max_length=255)
     value: str = Field(..., max_length=1000)
 
@@ -50,16 +58,13 @@ class SKUInProduct(BaseModel):
     id: UUID
     name: str
     price: int
-    discount: int = 0  # ← добавить скидку (по канону B2B-2)
-    image: Optional[str] = None  # ← основное фото SKU
-    active_quantity: int = Field(..., alias="activeQuantity")  # ← исправить название
-    characteristics: List[CharacteristicValue] = []
+    discount: int = 0
+    image: Optional[str] = None
+    active_quantity: int = Field(..., alias="activeQuantity")
+    characteristics: List[CharacteristicValue] = []  # ← без id (для SKU внутри Product)
     
     class Config:
-        # Позволяет использовать active_quantity как поле при создании
         populate_by_name = True
-        # Для совместимости со snake_case и camelCase
-        alias_generator = lambda s: ''.join(word.capitalize() if i else word for i, word in enumerate(s.split('_')))
 
 
 class ProductImageCreate(BaseModel):
@@ -69,7 +74,7 @@ class ProductImageCreate(BaseModel):
 
 
 class ProductImageResponse(BaseModel):
-    """Ответ с изображением товара"""
+    """Ответ с изображением товара (уже с id — оставляем)"""
     id: UUID
     url: str
     ordering: int

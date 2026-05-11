@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from typing import List, Optional
 from uuid import UUID
 import json
+import uuid
 
 from app.database import get_db
 from app.models.category import Category
@@ -17,7 +18,7 @@ from app.schemas.product import (
     ImageResponse,
     Product as ProductSchema
 )
-from app.schemas.common import CategoryRef, SKUInProduct
+from app.schemas.common import CategoryRef, SKUInProduct, CharacteristicValueResponse, ProductImageResponse
 from app.dependencies.auth import get_current_seller  # ← реальная JWT аутентификация
 
 router = APIRouter()
@@ -34,7 +35,7 @@ def error_response(code: str, message: str, status_code: int = 400):
 def create_product(
     product: ProductCreate,
     db: Session = Depends(get_db),
-    current_seller: Seller = Depends(get_current_seller)  # ← из JWT токена
+    current_seller: Seller = Depends(get_current_seller)
 ):
     """Создание карточки товара — B2B-1"""
     
@@ -47,12 +48,12 @@ def create_product(
     if not product.images or len(product.images) == 0:
         error_response("INVALID_REQUEST", "At least one image is required", 400)
     
-    # 3. Создание товара (seller_id из JWT, не из тела!)
+    # 3. Создание товара
     db_product = Product(
         title=product.title,
         description=product.description,
         category_id=product.category_id,
-        seller_id=current_seller.id,  # ← из JWT
+        seller_id=current_seller.id,
         status=ProductStatus.CREATED.value,
         deleted=False,
         blocked=False,
@@ -73,27 +74,33 @@ def create_product(
     db.commit()
     db.refresh(db_product)
     
-    # 5. Формирование ответа
+    # 5. Формирование ответа (по общей спецификации)
     return ProductResponse(
         id=db_product.id,
+        seller_id=current_seller.id,                    # ← добавить
+        category_id=product.category_id,                # ← вместо category объекта
         title=db_product.title,
         description=db_product.description,
         status=ProductStatus(db_product.status),
-        deleted=db_product.deleted,
-        blocked=db_product.blocked,
-        category=CategoryRef(id=category.id, name=category.name),
+        # deleted и blocked — УДАЛИТЬ
         images=[
-            ImageResponse(url=img.url, ordering=img.sort_order)
-            for img in db_product.images
+            ProductImageResponse(
+                id=img.id,                              # ← добавить id
+                url=img.url,
+                ordering=img.sort_order
+            ) for img in db_product.images
         ],
         characteristics=[
-            CharacteristicValue(**char) for char in (db_product.characteristics_json or [])
+            CharacteristicValueResponse(
+                id=uuid.uuid4(),                        # ← сгенерировать id
+                name=char["name"],
+                value=char["value"]
+            ) for char in (db_product.characteristics_json or [])
         ],
         skus=[],
         created_at=db_product.created_at,
         updated_at=db_product.updated_at
     )
-
 
 @router.get("/", response_model=List[ProductSchema])
 def get_products(
