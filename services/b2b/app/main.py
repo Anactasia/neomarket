@@ -1,10 +1,8 @@
+# app/main.py
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi import FastAPI, status
-from fastapi.responses import JSONResponse
-from fastapi.exceptions import RequestValidationError
 
-from app.api import router as api_router
-from app.api.auth import router as auth_router  
+from app.api import router as api_router  # импортируем единый роутер
 from app.core.logger import setup_logging
 
 
@@ -20,56 +18,34 @@ app = FastAPI(
     redoc_url="/api/redoc"
 )
 
-@app.exception_handler(RequestValidationError)
-async def validation_exception_handler(request, exc):
-    errors = exc.errors()
-    error_messages = []
-    
-    for error in errors:
-        field = ".".join(str(loc) for loc in error["loc"])
-        msg = error["msg"]
-        
-        if "field required" in msg:
-            error_messages.append(f"{field} is required")
-        else:
-            error_messages.append(msg)
-    
-    return JSONResponse(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        content={
-            "code": "INVALID_REQUEST",
-            "message": error_messages[0] if error_messages else "Validation error"
-        }
-    )
-
 # CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # в проде заменить на конкретные домены
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Подключаем роутеры
-app.include_router(auth_router)      
-app.include_router(api_router)       
+# Подключаем единый роутер (он уже содержит /api/v1 префикс)
+app.include_router(api_router)
 
 
 @app.get("/")
 async def root():
+    """Корневой endpoint с информацией о сервисе"""
     return {
         "service": "NeoMarket B2B",
         "version": "0.1.0",
-        "docs": "/api/docs",
-        "auth": "/api/auth"
+        "docs": "/api/docs"
     }
 
 
 @app.get("/health")
 async def health_check():
+    """Проверка здоровья сервиса"""
     return {
         "status": "ok",
         "service": "b2b",
-        "database": "connected"
+        "database": "connected"  # позже можно добавить реальную проверку БД
     }

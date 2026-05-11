@@ -8,13 +8,13 @@ pydantic-settings==2.1.0
 python-dotenv==1.0.0
 httpx==0.25.1
 
+# Тестирование
 pytest==7.4.3
 pytest-cov==4.1.0
 pytest-asyncio==0.21.1
 
+# Валидация
 email-validator==2.1.0
 
-python-jose[cryptography]==3.3.0
-passlib[bcrypt]==1.7.4
-bcrypt==4.0.1
+# Для работы с датами
 python-multipart==0.0.6
