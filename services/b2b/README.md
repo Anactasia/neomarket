@@ -13,19 +13,15 @@
 
 ### 1. Клонировать репозиторий
 ```bash
+# 1. Клонировать репозиторий
 git clone <REPO_URL>
 cd services/b2b
-```
-### 2. Запустить с помощью Docker (рекомендуется)
-```bash
-# Поднять базу данных и pgAdmin
-docker-compose up -d postgres pgadmin
 
-# Применить миграции
-docker-compose run --rm b2b-service alembic upgrade head
+# 2. Запустить сервис (миграции применяются автоматически)
+docker-compose up -d --build
 
-# Запустить сервис
-docker-compose up b2b-service
+# 3. Импортировать категории
+docker-compose exec b2b-service python scripts/import_categories.py
 ```
 
 
@@ -47,6 +43,15 @@ Swagger UI: http://localhost:8000/api/docs
 
 
 ## 🛠 Основные эндпоинты
+
+### Аутентификация (Auth)
+
+| Метод | Путь | Описание |
+|-------|------|----------|
+| POST | `/api/auth/register` | Регистрация продавца |
+| POST | `/api/auth/login` | Логин (получение JWT) |
+| POST | `/api/auth/refresh` | Обновление токена |
+| POST | `/api/auth/logout` | Выход |
 
 ### Продавцы (Sellers)
 
@@ -128,88 +133,38 @@ BLOCKED — заблокирован, продавец видит причину
 b2b/
 ├── app/
 │   ├── api/                 # Эндпоинты
-│   │   ├── products.py
-│   │   ├── skus.py
-│   │   ├── categories.py
-│   │   ├── sellers.py
-│   │   ├── invoices.py
-│   │   ├── reserve.py
-│   │   └── internal.py
+│   │   ├── auth.py          # JWT аутентификация
+│   │   ├── products.py      # CRUD товаров
+│   │   ├── categories.py    # Категории
+│   │   ├── skus.py          # SKU
+│   │   └── invoices.py      # Накладные
 │   ├── models/              # SQLAlchemy модели
 │   │   ├── seller.py
-│   │   ├── category.py
 │   │   ├── product.py
-│   │   ├── sku.py
-│   │   ├── invoice.py
-│   │   └── reservation.py
+│   │   ├── category.py
+│   │   └── sku.py
 │   ├── schemas/             # Pydantic схемы
-│   │   ├── common.py
-│   │   ├── product.py
-│   │   ├── sku.py
-│   │   ├── category.py
-│   │   ├── seller.py
-│   │   ├── invoice.py
-│   │   ├── reserve.py
-│   │   └── moderation.py
-│   ├── services/            # Бизнес-логика
+│   │   ├── common.py        # Общие схемы (CategoryRef, Image, CharacteristicValue)
+│   │   ├── product.py       # ProductCreate, ProductResponse
+│   │   └── auth.py          # Регистрация, логин
 │   ├── core/                # Утилиты
 │   │   ├── database.py
-│   │   └── config.py
+│   │   ├── config.py
+│   │   └── security.py      # JWT, хеширование
+│   ├── dependencies/        # FastAPI зависимости
+│   │   └── auth.py          # get_current_seller
 │   └── main.py              # Точка входа
-├── data/
-│   └── categories.json      # 115 категорий Telegram-контента
-├── scripts/
-│   └── import_categories.py # Скрипт импорта категорий
 ├── migrations/              # Alembic миграции
-├── tests/                   # Тесты
-├── requirements.txt
+├── tests/
+│   └── test_us_b2b_01.py    # Тесты создания товара
+├── scripts/
+│   └── import_categories.py # Импорт категорий
+├── data/
+│   └── categories.json      # 115 категорий
 ├── Dockerfile
 ├── docker-compose.yml
+├── requirements.txt
 └── README.md
 ```
 
 
-# Тестирование
-
-## Запуск всех тестов
-
-```
-docker-compose exec -e PYTHONPATH=/app b2b-service pytest tests/ -v
-```
-
-## Запуск всех тестов
-
-```
-# Тесты категорий
-docker-compose exec -e PYTHONPATH=/app b2b-service pytest tests/test_categories.py -v
-
-# Тесты продавцов
-docker-compose exec -e PYTHONPATH=/app b2b-service pytest tests/test_sellers.py -v
-
-# Тесты товаров
-docker-compose exec -e PYTHONPATH=/app b2b-service pytest tests/test_products.py -v
-
-# Тесты SKU
-docker-compose exec -e PYTHONPATH=/app b2b-service pytest tests/test_skus.py -v
-
-# Тесты накладных
-docker-compose exec -e PYTHONPATH=/app b2b-service pytest tests/test_invoices.py -v
-```
-
-Проходят 30/32 теста. 2 теста не проходят по причине того, что тестовая БД SQLite (там нет UUID) потом исправлю
-
-
-# Интеграция с другими сервисами
-
-## Moderation Service
-Отправка на модерацию: B2B отправляет товар при создании/изменении
-
-Колбэк: Moderation вызывает POST /internal/moderation-callback с результатом
-
-## B2C Service
-Резервирование: B2C вызывает POST /reserve/ при оформлении заказа
-
-Чтение товаров: B2C получает товары через GET /products/{id}
-
-## Auth Service
-Идентификация через заголовок X-User-Id (временно)
