@@ -25,9 +25,9 @@ class ProductStatus(str, Enum):
 
 class ProductCreate(BaseModel):
     title: str = Field(..., min_length=1, max_length=255)
-    description: str = Field(..., min_length=1, max_length=5000)
+    description: Optional[str] = Field(None, max_length=5000)
     category_id: UUID
-    images: List[ProductImageCreate] = Field(..., min_length=1)
+    images: List[ProductImageCreate] = Field(default_factory=list)
     characteristics: List[CharacteristicValue] = Field(default_factory=list)
     
     @field_validator('title')
@@ -37,12 +37,12 @@ class ProductCreate(BaseModel):
             raise ValueError('title is required')
         return v.strip()
     
-    @field_validator('description')
-    @classmethod
-    def validate_description(cls, v: str) -> str:
-        if not v or not v.strip():
-            raise ValueError('description is required')
-        return v.strip()
+    # @field_validator('description')
+    # @classmethod
+    # def validate_description(cls, v: str) -> str:
+    #     if not v or not v.strip():
+    #         raise ValueError('description is required')
+    #     return v.strip()
 
 
 class ProductResponse(BaseModel):
