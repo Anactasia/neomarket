@@ -102,6 +102,11 @@ class TestB2B01CreateProduct:
         assert data["status"] == "CREATED"
         assert data["skus"] == []
         assert "id" in data
+        # Проверка обязательных полей ProductResponse
+        assert "slug" in data
+        assert "deleted" in data
+        assert "blocking_reason_id" in data
+        assert "moderator_comment" in data
     
     def test_seller_id_taken_from_jwt(self, client, auth_headers, test_category, test_seller):
         """Сценарий 2: seller_id берётся из JWT, а не из тела запроса"""
@@ -166,3 +171,27 @@ class TestB2B01CreateProduct:
         }, headers=auth_headers)
         
         assert response.status_code in [400]
+    
+    def test_product_not_sent_to_moderation_without_skus(self, client, auth_headers, test_category):
+        """Инвариант B2B-1: товар без SKU остаётся в статусе CREATED, не ON_MODERATION"""
+        response = client.post("/api/v1/products/", json={
+            "title": "Test Product No SKU",
+            "description": "Test Description",
+            "category_id": str(test_category.id),
+            "images": [{"url": "/s3/test.jpg", "ordering": 0}]
+        }, headers=auth_headers)
+        
+        assert response.status_code == 201
+        data = response.json()
+        
+        # Статус должен быть CREATED, а не ON_MODERATION
+        assert data["status"] == "CREATED"
+        
+        # SKU должен быть пустым
+        assert data["skus"] == []
+        
+        # Проверка через GET
+        product_id = data["id"]
+        get_response = client.get(f"/api/v1/products/{product_id}", headers=auth_headers)
+        assert get_response.status_code == 200
+        assert get_response.json()["status"] == "CREATED"
