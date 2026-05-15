@@ -24,19 +24,7 @@ curl http://localhost:8000/health
 docker-compose exec b2b-service pytest tests/test_us_b2b_01.py -v
 ```
 
-## Ожидаемый результат тестов
 
-```
-=============================================== test session starts ================================================
-collected 6 items                                                                                                  
-
-tests/test_us_b2b_01.py::TestB2B01CreateProduct::test_create_product_returns_201_with_created_status PASSED  [ 16%]
-tests/test_us_b2b_01.py::TestB2B01CreateProduct::test_seller_id_taken_from_jwt PASSED                        [ 33%]
-tests/test_us_b2b_01.py::TestB2B01CreateProduct::test_missing_images_returns_400 PASSED                      [ 50%]
-tests/test_us_b2b_01.py::TestB2B01CreateProduct::test_missing_category_returns_400 PASSED                    [ 66%]
-tests/test_us_b2b_01.py::TestB2B01CreateProduct::test_invalid_category_id_returns_400 PASSED                 [ 83%]
-tests/test_us_b2b_01.py::TestB2B01CreateProduct::test_title_too_long_returns_400 PASSED                      [100%]
-```
 
 
 

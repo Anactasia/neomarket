@@ -29,6 +29,7 @@ class ProductCreate(BaseModel):
     category_id: UUID
     images: List[ProductImageCreate] = Field(default_factory=list)
     characteristics: List[CharacteristicValue] = Field(default_factory=list)
+    slug: Optional[str] = None
     
     @field_validator('title')
     @classmethod
@@ -47,20 +48,20 @@ class ProductCreate(BaseModel):
 
 class ProductResponse(BaseModel):
     id: UUID
-    seller_id: UUID                              # ← добавить
-    category_id: UUID                            # ← добавить (вместо category)
+    seller_id: UUID
+    category_id: UUID
     title: str
-    description: Optional[str]
+    slug: str
+    description: str
     status: ProductStatus
-    images: List[ProductImageResponse]           # ← уже с id
-    characteristics: List[CharacteristicValueResponse]  # ← с id
+    deleted: bool
+    blocking_reason_id: Optional[UUID] = None
+    moderator_comment: Optional[str] = None
+    images: List[ProductImageResponse]
+    characteristics: List[CharacteristicValueResponse]
     skus: List[SKUInProduct] = []
     created_at: datetime
-    updated_at: Optional[datetime]
-    
-    # deleted: bool
-    # blocked: bool
-    # category: CategoryRef
+    updated_at: Optional[datetime] = None
     
     class Config:
         from_attributes = True

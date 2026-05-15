@@ -19,8 +19,8 @@ class Product(BaseModel):
     seller_id = Column(GUID, ForeignKey("sellers.id", ondelete="CASCADE"), nullable=False)
     category_id = Column(GUID, ForeignKey("categories.id", ondelete="CASCADE"), nullable=False)
     title = Column(String(500), nullable=False)
+    slug = Column(String(500), nullable=True)
     description = Column(Text)
-    # slug - УДАЛЁН
     
     main_image_id = Column(
         GUID,
@@ -33,8 +33,9 @@ class Product(BaseModel):
     # meta_description = Column(Text)
     # meta_keywords = Column(Text)
     
-    status = Column(String(20), nullable=False, default="CREATED")  # ← изменил default с DRAFT на CREATED
+    status = Column(String(20), nullable=False, default="CREATED")
     moderation_comment = Column(Text)
+    blocking_reason_id = Column(GUID, nullable=True)
     
     published_at = Column(DateTime(timezone=True), nullable=True)
     

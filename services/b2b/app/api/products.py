@@ -48,21 +48,29 @@ def create_product(
     if not product.images or len(product.images) == 0:
         error_response("INVALID_REQUEST", "At least one image is required", 400)
     
-    # 3. Создание товара
+    # 3. Генерация slug из title, если не передан
+    slug = product.slug
+    if not slug:
+        slug = product.title.lower().replace(' ', '-')[:50]
+    
+    # 4. Создание товара
     db_product = Product(
         title=product.title,
+        slug=slug,
         description=product.description,
         category_id=product.category_id,
         seller_id=current_seller.id,
         status=ProductStatus.CREATED.value,
         deleted=False,
         blocked=False,
+        moderation_comment=None,
+        blocking_reason_id=None,
         characteristics_json=[char.model_dump() for char in product.characteristics]
     )
     db.add(db_product)
     db.flush()
     
-    # 4. Сохранение изображений
+    # 5. Сохранение изображений
     for img in product.images:
         db_image = ProductImage(
             product_id=db_product.id,
@@ -74,25 +82,28 @@ def create_product(
     db.commit()
     db.refresh(db_product)
     
-    # 5. Формирование ответа (по общей спецификации)
+    # 6. Формирование ответа (по спецификации neomarket-b2b.yaml)
     return ProductResponse(
         id=db_product.id,
-        seller_id=current_seller.id,                    # ← добавить
-        category_id=product.category_id,                # ← вместо category объекта
+        seller_id=current_seller.id,
+        category_id=product.category_id,
         title=db_product.title,
+        slug=db_product.slug or "",
         description=db_product.description,
         status=ProductStatus(db_product.status),
-        # deleted и blocked — УДАЛИТЬ
+        deleted=db_product.deleted,
+        blocking_reason_id=db_product.blocking_reason_id,
+        moderator_comment=db_product.moderation_comment,
         images=[
             ProductImageResponse(
-                id=img.id,                              # ← добавить id
+                id=img.id,
                 url=img.url,
                 ordering=img.sort_order
             ) for img in db_product.images
         ],
         characteristics=[
             CharacteristicValueResponse(
-                id=uuid.uuid4(),                        # ← сгенерировать id
+                id=uuid.uuid4(),
                 name=char["name"],
                 value=char["value"]
             ) for char in (db_product.characteristics_json or [])
