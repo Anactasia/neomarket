@@ -20,9 +20,15 @@ class SKU(BaseModel):
     name = Column(String(500), nullable=False)
     
     price = Column(Integer, nullable=False)
-    compare_at_price = Column(Integer)
-    quantity = Column(Integer, nullable=False, default=0)
-    reserved_quantity = Column(Integer, default=0)
+    cost_price = Column(Integer, nullable=False)  # себестоимость
+    discount = Column(Integer, default=0)  # скидка в копейках
+    image = Column(Text)  # ссылка на изображение в S3
+    
+    stock_quantity = Column(Integer, nullable=False, default=0)  # всего на складе
+    active_quantity = Column(Integer, default=0)  # доступно к продаже
+    reserved_quantity = Column(Integer, default=0)  # зарезервировано
+    
+    article = Column(String(100))  # артикул
     
     is_active = Column(Boolean, default=True)
     main_image_id = Column(GUID, ForeignKey("product_images.id"), nullable=True)
@@ -31,7 +37,8 @@ class SKU(BaseModel):
     product = relationship("Product", back_populates="skus")
     main_image = relationship("ProductImage")
     characteristics = relationship("SKUCharacteristic", back_populates="sku", cascade="all, delete-orphan")
-    reservations = relationship("SKUReservation", back_populates="sku", cascade="all, delete-orphan")  # ← строка остаётся
+    reservations = relationship("SKUReservation", back_populates="sku", cascade="all, delete-orphan")
+
 
 class SKUCharacteristic(BaseModel):
     __tablename__ = "sku_characteristics"
