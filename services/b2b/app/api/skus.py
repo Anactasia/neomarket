@@ -13,6 +13,8 @@ from app.schemas.sku import (
     SKUCreate,
     SKUCreateWithValidation,
     SKU as SKUSchema,
+    SKUUpdate,
+    SKUUpdateWithValidation,
     SKUImageResponse,
     SKUCharacteristicResponse
 )
@@ -24,7 +26,7 @@ from app.models.seller import Seller
 router = APIRouter()
 
 
-def error_response(code: str, message: str, status_code: int = 400):
+def error_response(code: str, message: str, status_code: int = 422):
     raise HTTPException(
         status_code=status_code,
         detail={"code": code, "message": message}
@@ -35,10 +37,11 @@ def send_event_to_moderation_sync(
     product_id: UUID,
     seller_id: UUID,
     idempotency_key: str,
-    moderation_url: str = "http://moderation:8000"
+    moderation_url: str = "http://moderation:8000",
+    event_type: str = "CREATED"
 ):
     """
-    Отправляет событие CREATED в Moderation Service синхронно.
+    Отправляет событие (CREATED или EDITED) в Moderation Service синхронно.
     Для production рекомендуется outbox pattern или асинхронная очередь.
     """
     import httpx
@@ -48,7 +51,7 @@ def send_event_to_moderation_sync(
         "idempotency_key": str(idempotency_key),
         "product_id": str(product_id),
         "seller_id": str(seller_id),
-        "event": "CREATED",
+        "event": event_type,
         "date": datetime.now(timezone.utc).isoformat()
     }
     
@@ -162,6 +165,105 @@ def create_sku(
         created_at=db_sku.created_at,
         updated_at=db_sku.updated_at
     )
+
+
+@router.patch("/{sku_id}", response_model=SKUSchema, status_code=status.HTTP_200_OK)
+def update_sku(
+    sku_id: UUID,
+    sku_update: SKUUpdateWithValidation,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    current_seller: Seller = Depends(get_current_seller)
+):
+    """
+    Обновить SKU (вариант товара).
+    
+    Побочные эффекты:
+    - Если товар в статусе MODERATED или BLOCKED → товар переходит в ON_MODERATION
+    - Отправляется событие EDITED в Moderation Service (всегда при редактировании)
+    - reserved_quantity сохраняется (не сбрасывается)
+    """
+    # 1. Проверяем существование SKU
+    db_sku = db.query(SKU).filter(SKU.id == sku_id).first()
+    if not db_sku:
+        error_response("NOT_FOUND", "SKU not found", 404)
+    
+    # 2. Проверяем родительский товар
+    product = db.query(Product).filter(Product.id == db_sku.product_id).first()
+    if not product:
+        error_response("NOT_FOUND", "Product not found", 404)
+    
+    # 3. Проверяем, что товар не в статусе HARD_BLOCKED
+    if product.status == ProductStatus.HARD_BLOCKED.value:
+        error_response("FORBIDDEN", "Cannot edit hard-blocked product", 403)
+    
+    # 4. Проверяем, что товар принадлежит текущему продавцу (IDOR защита)
+    if product.seller_id != current_seller.id:
+        error_response("NOT_OWNER", "Product does not belong to the authenticated seller", 403)
+    
+    # 5. Сохраняем reserved_quantity перед обновлением
+    old_reserved_quantity = db_sku.reserved_quantity
+    
+    # 6. Обновляем поля SKU
+    for field, value in sku_update.model_dump(exclude_unset=True).items():
+        if field == 'characteristics' and value is not None:
+            # Обновляем характеристики
+            db.query(SKUCharacteristic).filter(SKUCharacteristic.sku_id == db_sku.id).delete()
+            for char in value:
+                db_char = SKUCharacteristic(
+                    sku_id=db_sku.id,
+                    value_string=char.value
+                )
+                db.add(db_char)
+        elif value is not None:
+            setattr(db_sku, field, value)
+    
+    # 7. Восстанавливаем reserved_quantity (сохраняем активные резервы)
+    db_sku.reserved_quantity = old_reserved_quantity
+    
+    # 8. Проверяем, нужно ли менять статус товара
+    # Статус меняется, если товар был в MODERATED или BLOCKED
+    needs_status_change = product.status in [ProductStatus.MODERATED.value, ProductStatus.BLOCKED.value]
+    
+    # 9. Если товар в MODERATED или BLOCKED → меняем статус на ON_MODERATION
+    if needs_status_change:
+        product.status = ProductStatus.ON_MODERATION.value
+    
+    db.commit()
+    db.refresh(db_sku)
+    
+    # 10. Отправляем событие EDITED в Moderation (background task)
+    # Событие отправляется всегда, если товар уже был на модерации (статус != CREATED)
+    # или если он в BLOCKED (что означает, что был на модерации ранее)
+    if product.status != ProductStatus.CREATED.value or product.blocked:
+        idempotency_key = uuid_module.uuid4()
+        background_tasks.add_task(
+            send_event_to_moderation_sync,
+            product_id=product.id,
+            seller_id=product.seller_id,
+            idempotency_key=idempotency_key,
+            event_type="EDITED"
+        )
+    
+    # 11. Формируем ответ (используем SKUSchema как в OpenAPI SKUResponse)
+    return SKUSchema(
+        id=db_sku.id,
+        product_id=db_sku.product_id,
+        name=db_sku.name,
+        price=db_sku.price,
+        cost_price=db_sku.cost_price,
+        discount=db_sku.discount,
+        image=db_sku.image,
+        stock_quantity=db_sku.stock_quantity,
+        active_quantity=db_sku.active_quantity,
+        reserved_quantity=db_sku.reserved_quantity,
+        article=db_sku.article,
+        images=[],
+        characteristics=[],
+        created_at=db_sku.created_at,
+        updated_at=db_sku.updated_at
+    )
+
 
 @router.delete("/{sku_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_sku(sku_id: UUID, db: Session = Depends(get_db)):

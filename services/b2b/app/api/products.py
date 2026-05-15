@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from uuid import UUID
@@ -24,11 +24,45 @@ from app.dependencies.auth import get_current_seller  # ← реальная JWT
 router = APIRouter()
 
 
-def error_response(code: str, message: str, status_code: int = 400):
+def error_response(code: str, message: str, status_code: int = 422):
     raise HTTPException(
         status_code=status_code,
         detail={"code": code, "message": message}
     )
+
+
+def send_event_to_moderation_sync(
+    product_id: UUID, 
+    seller_id: UUID,
+    idempotency_key: str,
+    moderation_url: str = "http://moderation:8000",
+    event_type: str = "EDITED"
+):
+    """
+    Отправляет событие (CREATED или EDITED) в Moderation Service синхронно.
+    Для production рекомендуется outbox pattern или асинхронная очередь.
+    """
+    import httpx
+    from datetime import datetime, timezone
+    
+    event_payload = {
+        "idempotency_key": str(idempotency_key),
+        "product_id": str(product_id),
+        "seller_id": str(seller_id),
+        "event": event_type,
+        "date": datetime.now(timezone.utc).isoformat()
+    }
+    
+    try:
+        with httpx.Client(timeout=5.0) as client:
+            client.post(
+                f"{moderation_url}/api/v1/events/product",
+                json=event_payload,
+                headers={"X-Service-Key": "b2b-service-key"}
+            )
+    except Exception:
+        # fire-and-forget: не блокируем ответ при недоступности Moderation
+        pass
 
 
 @router.post("/", response_model=ProductResponse, status_code=status.HTTP_201_CREATED)
@@ -164,17 +198,25 @@ def get_product(
     return product
 
 
-@router.put("/{product_id}", response_model=ProductSchema)
+@router.patch("/{product_id}", response_model=ProductResponse, status_code=status.HTTP_200_OK)
 def update_product(
     product_id: UUID,
     product_update: ProductUpdate,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    current_seller: Seller = Depends(get_current_seller)  # ← авторизация
+    current_seller: Seller = Depends(get_current_seller)
 ):
-    """Обновить товар (только свои товары)"""
+    """
+    Обновить товар (только свои товары).
+    
+    Побочные эффекты:
+    - Если товар в статусе MODERATED или BLOCKED → товар переходит в ON_MODERATION
+    - Отправляется событие EDITED в Moderation Service (всегда при редактировании)
+    """
+    # 1. Проверяем существование товара
     product = db.query(Product).filter(
         Product.id == product_id,
-        Product.seller_id == current_seller.id  # ← проверка владельца
+        Product.seller_id == current_seller.id
     ).first()
     
     if not product:
@@ -183,20 +225,74 @@ def update_product(
             detail={"code": "NOT_FOUND", "message": "Product not found"}
         )
     
-    for field, value in product_update.model_dump(exclude_unset=True).items():
-        if field == 'characteristics' and value is not None:
-            product.characteristics_json = [char.model_dump() for char in value]
-        elif value is not None:
-            setattr(product, field, value)
+    # 2. Проверяем, что товар не в статусе HARD_BLOCKED
+    if product.status == ProductStatus.HARD_BLOCKED.value:
+        error_response("FORBIDDEN", "Cannot edit hard-blocked product", 403)
     
-    # Если обновили важные поля - отправляем на модерацию
-    if product_update.model_dump(exclude_unset=True):
-        if product.status == ProductStatus.MODERATED.value:
-            product.status = ProductStatus.ON_MODERATION.value
+    # 3. Обновляем поля
+    update_data = product_update.model_dump(exclude_unset=True)
+    if update_data:
+        for field, value in update_data.items():
+            if field == 'characteristics' and value is not None:
+                product.characteristics_json = [char.model_dump() for char in value]
+            elif value is not None:
+                setattr(product, field, value)
+    
+    # 4. Проверяем, нужно ли менять статус товара
+    # Статус меняется, если товар был в MODERATED или BLOCKED
+    needs_status_change = product.status in [ProductStatus.MODERATED.value, ProductStatus.BLOCKED.value]
+    
+    # 5. Если товар в MODERATED или BLOCKED → меняем статус на ON_MODERATION
+    if needs_status_change:
+        product.status = ProductStatus.ON_MODERATION.value
     
     db.commit()
     db.refresh(product)
-    return product
+    
+    # 6. Отправляем событие EDITED в Moderation (background task)
+    # Событие отправляется всегда, если товар уже был на модерации (статус != CREATED)
+    # или если он в BLOCKED (что означает, что был на модерации ранее)
+    if product.status != ProductStatus.CREATED.value or product.blocked:
+        import uuid as uuid_module
+        idempotency_key = uuid_module.uuid4()
+        background_tasks.add_task(
+            send_event_to_moderation_sync,
+            product_id=product.id,
+            seller_id=product.seller_id,
+            idempotency_key=idempotency_key,
+            event_type="EDITED"
+        )
+    
+    # Формируем ответ (по спецификации neomarket-b2b.yaml)
+    return ProductResponse(
+        id=product.id,
+        seller_id=product.seller_id,
+        category_id=product.category_id,
+        title=product.title,
+        slug=product.slug or "",
+        description=product.description,
+        status=ProductStatus(product.status),
+        deleted=product.deleted,
+        blocking_reason_id=product.blocking_reason_id,
+        moderator_comment=product.moderation_comment,
+        images=[
+            ProductImageResponse(
+                id=img.id,
+                url=img.url,
+                ordering=img.sort_order
+            ) for img in product.images
+        ],
+        characteristics=[
+            CharacteristicValueResponse(
+                id=uuid.uuid4(),
+                name=char["name"],
+                value=char["value"]
+            ) for char in (product.characteristics_json or [])
+        ],
+        skus=[],
+        created_at=product.created_at,
+        updated_at=product.updated_at
+    )
 
 
 @router.delete("/{product_id}", status_code=status.HTTP_204_NO_CONTENT)
