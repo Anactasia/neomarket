@@ -8,6 +8,7 @@ import uuid
 from app.database import get_db
 from app.models.category import Category
 from app.models.product import Product, ProductImage
+from app.models.sku import SKU
 from app.models.seller import Seller
 from app.schemas.product import (
     ProductCreate,
@@ -86,6 +87,49 @@ def send_event_to_moderation_sync(
             )
     except Exception:
         # fire-and-forget: не блокируем ответ при недоступности Moderation
+        pass
+    
+
+def send_event_to_b2c_sync(
+    product_id: UUID, 
+    sku_ids: List[UUID],
+    idempotency_key: str,
+    b2c_url: str = "http://b2c:8000",
+    event_type: str = "PRODUCT_DELETED"
+):
+    """
+    Отправляет событие (PRODUCT_DELETED) в B2C Service синхронно.
+    
+    Соответствует спецификации neomarket-b2c.yaml:
+    - URL: POST /api/v1/b2b/events
+    - Тело: {event_type, idempotency_key, occurred_at, payload}
+    - payload: EventProductRef {product_id, reason?}
+    
+    Примечание: B2C сам определяет SKU по product_id при обработке события.
+    """
+    import httpx
+    from datetime import datetime, timezone
+    
+    payload = {
+        "product_id": str(product_id)
+    }
+    
+    event_payload = {
+        "event_type": event_type,
+        "idempotency_key": str(idempotency_key),
+        "occurred_at": datetime.now(timezone.utc).isoformat(),
+        "payload": payload
+    }
+    
+    try:
+        with httpx.Client(timeout=5.0) as client:
+            client.post(
+                f"{b2c_url}/api/v1/b2b/events",
+                json=event_payload,
+                headers={"X-Service-Key": "b2b-to-b2c-key"}
+            )
+    except Exception:
+        # fire-and-forget: не блокируем ответ при недоступности B2C
         pass
     
 
@@ -178,21 +222,25 @@ def get_products(
     seller_id: Optional[UUID] = None,
     category_id: Optional[UUID] = None,
     status: Optional[str] = None,
+    include_deleted: bool = False,
     db: Session = Depends(get_db),
     current_seller: Seller = Depends(get_current_seller)  # ← авторизация для списка товаров
 ):
     """
     Получить список товаров текущего продавца с фильтрацией.
     seller_id из query игнорируется — всегда фильтруем по текущему продавцу.
+    Удалённые товары не включаются по умолчанию (include_deleted=false).
     """
     # Всегда фильтруем по текущему продавцу (безопасность)
     query = db.query(Product).filter(Product.seller_id == current_seller.id)
-    
+
     if category_id:
         query = query.filter(Product.category_id == category_id)
     if status:
         query = query.filter(Product.status == status)
-    
+    if not include_deleted:
+        query = query.filter(Product.deleted == False)
+
     # Игнорируем переданный seller_id (защита от IDOR)
     if seller_id:
         # Можно вернуть 400 или просто игнорировать
@@ -220,7 +268,7 @@ def get_product(
             detail={"code": "NOT_FOUND", "message": "Product not found"}
         )
     return product
-
+    
 
 @router.patch("/{product_id}", response_model=ProductResponse, status_code=status.HTTP_200_OK)
 def update_product(
@@ -333,18 +381,31 @@ def update_product(
         created_at=product.created_at,
         updated_at=product.updated_at
     )
-
+    
 
 @router.delete("/{product_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_product(
     product_id: UUID, 
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    current_seller: Seller = Depends(get_current_seller)  # ← авторизация
+    current_seller: Seller = Depends(get_current_seller)
 ):
-    """Удалить товар (мягкое удаление)"""
+    """
+    Удалить товар (мягкое удаление).
+    
+    Побочные эффекты:
+    - Устанавливает deleted = true в БД
+    - Отправляет событие DELETED в Moderation Service
+    - Отправляет событие PRODUCT_DELETED в B2C Service (со списком sku_ids)
+    
+    Ошибки:
+    - 404: товар не найден
+    - 400: товар уже удалён
+    """
+    # 1. Проверяем существование товара (с проверкой ownership)
     product = db.query(Product).filter(
         Product.id == product_id,
-        Product.seller_id == current_seller.id  # ← проверка владельца
+        Product.seller_id == current_seller.id
     ).first()
     
     if not product:
@@ -353,7 +414,56 @@ def delete_product(
             detail={"code": "NOT_FOUND", "message": "Product not found"}
         )
     
-    # Мягкое удаление
+    # 2. Проверка на повторное удаление
+    if product.deleted:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "INVALID_REQUEST", "message": "Product already deleted"}
+        )
+    
+    # 3. Получаем sku_ids для события в B2C
+    skus = db.query(SKU).filter(SKU.product_id == product_id).all()
+    sku_ids = [sku.id for sku in skus]
+    
+    # 4. Мягкое удаление
     product.deleted = True
     db.commit()
+    db.refresh(product)
+    
+    # 5. Отправляем событие DELETED в Moderation (background task)
+    import uuid as uuid_module
+    moderation_idempotency_key = uuid_module.uuid4()
+    background_tasks.add_task(
+        send_event_to_moderation_sync,
+        product_id=product.id,
+        seller_id=product.seller_id,
+        idempotency_key=moderation_idempotency_key,
+        event_type="PRODUCT_DELETED",
+        json_before={
+            "product_id": str(product.id),
+            "seller_id": str(product.seller_id),
+            "title": product.title,
+            "status": product.status,
+            "deleted": False
+        },
+        json_after={
+            "product_id": str(product.id),
+            "seller_id": str(product.seller_id),
+            "title": product.title,
+            "status": product.status,
+            "deleted": True
+        },
+        category_id=product.category_id
+    )
+    
+    # 6. Отправляем событие PRODUCT_DELETED в B2C (background task)
+    b2c_idempotency_key = uuid_module.uuid4()
+    background_tasks.add_task(
+        send_event_to_b2c_sync,
+        product_id=product.id,
+        sku_ids=sku_ids,
+        idempotency_key=b2c_idempotency_key,
+        event_type="PRODUCT_DELETED"
+    )
+    
     return None
