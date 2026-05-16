@@ -123,6 +123,43 @@ def test_product_hard_blocked(db_session, test_category, test_seller):
     return product
 
 
+@pytest.fixture
+def test_other_seller_product(db_session, test_category, test_seller):
+    """Создаём товар другого продавца"""
+    unique_suffix = str(uuid4()).replace('-', '')[:12]
+    other_seller = Seller(
+        id=uuid4(),
+        email=f"other_{unique_suffix}@example.com",
+        hashed_password="fake_hash_for_testing",
+        first_name="Other",
+        last_name="Seller",
+        company_name="Other Company",
+        inn=f"{unique_suffix[:12]}",
+        status="ACTIVE",
+        is_active=True
+    )
+    db_session.add(other_seller)
+    db_session.flush()
+    
+    product = Product(
+        id=uuid4(),
+        seller_id=other_seller.id,
+        category_id=test_category.id,
+        title="Other Seller Product",
+        slug="other-seller-product",
+        description="Other Description",
+        status=ProductStatus.CREATED.value,
+        deleted=False,
+        blocked=False,
+        moderation_comment=None,
+        blocking_reason_id=None
+    )
+    db_session.add(product)
+    db_session.commit()
+    db_session.refresh(product)
+    return {"product": product, "other_seller": other_seller}
+
+
 class TestB2B02CreateSKU:
     """Тесты для US-B2B-02: Создание SKU"""
 
@@ -288,3 +325,21 @@ class TestB2B02CreateSKU:
         assert response.status_code == 404
         error_data = response.json()
         assert error_data["detail"]["code"] == "NOT_FOUND"
+
+    def test_create_sku_for_others_product_returns_403(
+        self, client, auth_headers, test_other_seller_product
+    ):
+        """Сценарий 8: добавление SKU к чужому товару → 403"""
+        response = client.post("/api/v1/skus/", json={
+            "product_id": str(test_other_seller_product["product"].id),
+            "name": "256GB Black",
+            "price": 12999000,
+            "cost_price": 9500000,
+            "discount": 0,
+            "image": "/s3/iphone15-black-256.jpg"
+        }, headers=auth_headers)
+
+        assert response.status_code == 403
+        error_data = response.json()
+        assert error_data["detail"]["code"] == "FORBIDDEN"
+        assert "does not belong" in error_data["detail"]["message"].lower()

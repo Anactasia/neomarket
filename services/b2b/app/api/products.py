@@ -36,34 +36,58 @@ def send_event_to_moderation_sync(
     seller_id: UUID,
     idempotency_key: str,
     moderation_url: str = "http://moderation:8000",
-    event_type: str = "EDITED"
+    event_type: str = "PRODUCT_EDITED",
+    json_before: Optional[dict] = None,
+    json_after: Optional[dict] = None,
+    category_id: Optional[UUID] = None
 ):
     """
-    Отправляет событие (CREATED или EDITED) в Moderation Service синхронно.
+    Отправляет событие (PRODUCT_CREATED или PRODUCT_EDITED) в Moderation Service синхронно.
     Для production рекомендуется outbox pattern или асинхронная очередь.
+    
+    Соответствует спецификации neomarket-moderation.yaml:
+    - URL: POST /api/v1/b2b/events
+    - Тело: IncomingB2BEvent (event_type, idempotency_key, occurred_at, payload)
+    
+    event_type: "PRODUCT_CREATED" или "PRODUCT_EDITED"
+    payload:
+      - PRODUCT_CREATED: {product_id, seller_id, category_id?, json_after}
+      - PRODUCT_EDITED: {product_id, seller_id, category_id?, json_before, json_after}
     """
     import httpx
     from datetime import datetime, timezone
     
-    event_payload = {
-        "idempotency_key": str(idempotency_key),
+    payload: dict = {
         "product_id": str(product_id),
         "seller_id": str(seller_id),
-        "event": event_type,
-        "date": datetime.now(timezone.utc).isoformat()
+    }
+    if category_id:
+        payload["category_id"] = str(category_id)
+    
+    if event_type == "PRODUCT_CREATED":
+        payload["json_after"] = json_after or {}
+    elif event_type == "PRODUCT_EDITED":
+        payload["json_before"] = json_before or {}
+        payload["json_after"] = json_after or {}
+    
+    event_payload = {
+        "event_type": event_type,
+        "idempotency_key": str(idempotency_key),
+        "occurred_at": datetime.now(timezone.utc).isoformat(),
+        "payload": payload
     }
     
     try:
         with httpx.Client(timeout=5.0) as client:
             client.post(
-                f"{moderation_url}/api/v1/events/product",
+                f"{moderation_url}/api/v1/b2b/events",
                 json=event_payload,
                 headers={"X-Service-Key": "b2b-service-key"}
             )
     except Exception:
         # fire-and-forget: не блокируем ответ при недоступности Moderation
         pass
-
+    
 
 @router.post("/", response_model=ProductResponse, status_code=status.HTTP_201_CREATED)
 def create_product(
@@ -103,7 +127,7 @@ def create_product(
     )
     db.add(db_product)
     db.flush()
-    
+
     # 5. Сохранение изображений
     for img in product.images:
         db_image = ProductImage(
@@ -255,12 +279,28 @@ def update_product(
     if product.status != ProductStatus.CREATED.value or product.blocked:
         import uuid as uuid_module
         idempotency_key = uuid_module.uuid4()
+        # Формируем json_before и json_after
+        json_before = {
+            "product_id": str(product.id),
+            "seller_id": str(product.seller_id),
+            "title": product.title,
+            "status": ProductStatus.MODERATED.value if needs_status_change else product.status
+        }
+        json_after = {
+            "product_id": str(product.id),
+            "seller_id": str(product.seller_id),
+            "title": product.title,
+            "status": ProductStatus.ON_MODERATION.value if needs_status_change else product.status
+        }
         background_tasks.add_task(
             send_event_to_moderation_sync,
             product_id=product.id,
             seller_id=product.seller_id,
             idempotency_key=idempotency_key,
-            event_type="EDITED"
+            event_type="PRODUCT_EDITED",
+            json_before=json_before,
+            json_after=json_after,
+            category_id=product.category_id
         )
     
     # Формируем ответ (по спецификации neomarket-b2b.yaml)

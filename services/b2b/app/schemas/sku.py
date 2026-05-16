@@ -10,7 +10,7 @@ from app.schemas.common import CharacteristicValue
 class SKUBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     price: int = Field(..., ge=1, description="Цена в копейках")
-    cost_price: int = Field(..., ge=1, description="Себестоимость в копейках")
+    cost_price: Optional[int] = Field(None, ge=1, description="Себестоимость в копейках")
     discount: int = Field(0, ge=0, description="Скидка в копейках")
     image: Optional[str] = Field(None, description="Ссылка на изображение в S3")
     characteristics: List[CharacteristicValue] = Field(default_factory=list)
@@ -40,18 +40,18 @@ class SKUCreateWithValidation(SKUCreate):
     
     @field_validator('cost_price')
     @classmethod
-    def validate_cost_price(cls, v: int) -> int:
-        if v <= 0:
+    def validate_cost_price(cls, v: Optional[int]) -> Optional[int]:
+        if v is not None and v <= 0:
             raise ValueError('cost_price must be a positive integer (kopecks)')
         return v
-    
+
     @field_validator('discount')
     @classmethod
     def validate_discount(cls, v: int) -> int:
         if v < 0:
             raise ValueError('discount must be >= 0')
         return v
-    
+
     @field_validator('image')
     @classmethod
     def validate_image(cls, v: Optional[str]) -> Optional[str]:
