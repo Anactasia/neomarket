@@ -23,6 +23,26 @@ class ProductStatus(str, Enum):
     HARD_BLOCKED = "HARD_BLOCKED"
 
 
+class FieldReport(BaseModel):
+    """Замечание по конкретному полю товара или SKU"""
+    field_name: str = Field(..., description="Имя поля: title, description, product_images, category, sku_name, sku_image, sku_price")
+    sku_id: Optional[UUID] = Field(None, description="ID SKU (null если замечание к товару)")
+    comment: str = Field(..., max_length=1000, description="Комментарий модератора")
+
+    class Config:
+        from_attributes = True
+
+
+class BlockingReason(BaseModel):
+    """Причина блокировки товара"""
+    id: UUID
+    title: str = Field(..., description="Текст причины")
+    comment: Optional[str] = Field(None, max_length=2000, description="Дополнительный комментарий модератора")
+
+    class Config:
+        from_attributes = True
+
+
 class ProductCreate(BaseModel):
     title: str = Field(..., min_length=1, max_length=255)
     description: Optional[str] = Field(None, max_length=5000)
@@ -55,7 +75,9 @@ class ProductResponse(BaseModel):
     description: str
     status: ProductStatus
     deleted: bool
-    blocking_reason_id: Optional[UUID] = None
+    blocked: bool = False
+    blocking_reason: Optional[BlockingReason] = None
+    field_reports: List[FieldReport] = []
     moderator_comment: Optional[str] = None
     images: List[ProductImageResponse]
     characteristics: List[CharacteristicValueResponse]

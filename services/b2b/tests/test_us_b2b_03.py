@@ -311,8 +311,8 @@ class TestB2B03EditProduct:
 
         assert response.status_code == 403
         error_data = response.json()
-        assert error_data["detail"]["code"] == "FORBIDDEN"
-        assert "hard-blocked" in error_data["detail"]["message"].lower()
+        assert error_data["code"] == "FORBIDDEN"
+        assert "hard-blocked" in error_data["message"].lower()
 
     def test_edit_others_product_returns_403(
         self, client, auth_headers, test_other_seller_product
@@ -333,10 +333,9 @@ class TestB2B03EditProduct:
 
         # В текущей реализации: если товар не найден (из-за фильтра по seller_id),
         # возвращаем 404. Это тоже безопасно (не раскрываем, что товар существует)
-        assert response.status_code in [403, 404]
-        if response.status_code == 403:
-            error_data = response.json()
-            assert error_data["detail"]["code"] == "NOT_OWNER"
+        assert response.status_code == 404
+        error_data = response.json()
+        assert error_data["code"] == "NOT_FOUND"
 
     def test_edit_created_product_no_status_change(
         self, client, auth_headers, test_product_created
@@ -451,8 +450,8 @@ class TestB2B03EditSKU:
             
             assert response.status_code == 403
             error_data = response.json()
-            assert error_data["detail"]["code"] == "FORBIDDEN"
-            assert "hard-blocked" in error_data["detail"]["message"].lower()
+            assert error_data["code"] == "FORBIDDEN"
+            assert "hard-blocked" in error_data["message"].lower()
         finally:
             db.delete(sku)
             db.commit()
@@ -492,8 +491,8 @@ class TestB2B03EditSKU:
             
             assert response.status_code == 403
             error_data = response.json()
-            assert error_data["detail"]["code"] == "NOT_OWNER"
-            assert "does not belong" in error_data["detail"]["message"].lower()
+            assert error_data["code"] == "NOT_OWNER"
+            assert "does not belong" in error_data["message"].lower()
         finally:
             db_session.delete(sku)
             db_session.commit()
@@ -513,7 +512,7 @@ class TestB2B03EditSKU:
 
         assert response.status_code == 404
         error_data = response.json()
-        assert error_data["detail"]["code"] == "NOT_FOUND"
+        assert error_data["code"] == "NOT_FOUND"
 
     def test_edit_sku_created_product_sends_event(
         self, client, auth_headers, test_product_created, db_session

@@ -173,7 +173,9 @@ class TestB2B02CreateSKU:
             "price": 12999000,
             "cost_price": 9500000,
             "discount": 0,
-            "image": "/s3/iphone15-black-256.jpg",
+            "images": [
+                {"url": "/s3/iphone15-black-256.jpg", "ordering": 0}
+            ],
             "characteristics": [
                 {"name": "Цвет", "value": "Чёрный"},
                 {"name": "Объём памяти", "value": "256 ГБ"}
@@ -205,7 +207,9 @@ class TestB2B02CreateSKU:
             "price": 12999000,
             "cost_price": 9500000,
             "discount": 0,
-            "image": "/s3/iphone15-black-256.jpg"
+            "images": [
+                {"url": "/s3/iphone15-black-256.jpg", "ordering": 0}
+            ]
         }, headers=auth_headers)
 
         # Проверяем, что товар в ON_MODERATION
@@ -222,7 +226,9 @@ class TestB2B02CreateSKU:
             "price": 9999000,
             "cost_price": 7500000,
             "discount": 0,
-            "image": "/s3/iphone15-white-128.jpg"
+            "images": [
+                {"url": "/s3/iphone15-white-128.jpg", "ordering": 0}
+            ]
         }, headers=auth_headers)
 
         assert response.status_code == 201
@@ -244,34 +250,33 @@ class TestB2B02CreateSKU:
             "price": 12999000,
             "cost_price": 9500000,
             "discount": 0,
-            "image": "/s3/iphone15-black-256.jpg"
+            "images": [
+                {"url": "/s3/iphone15-black-256.jpg", "ordering": 0}
+            ]
         }, headers=auth_headers)
 
         assert response.status_code == 403
         error_data = response.json()
-        assert error_data["detail"]["code"] == "FORBIDDEN"
-        assert "hard-blocked" in error_data["detail"]["message"].lower()
+        assert error_data["code"] == "FORBIDDEN"
+        assert "hard-blocked" in error_data["message"].lower()
 
     def test_missing_image_returns_400(
         self, client, auth_headers, test_product_created
     ):
-        """Сценарий 4: отсутствие image → 400"""
+        """Сценарий 4: отсутствие images → 400"""
         response = client.post("/api/v1/skus/", json={
             "product_id": str(test_product_created.id),
             "name": "256GB Black",
             "price": 12999000,
             "cost_price": 9500000,
             "discount": 0,
-            "image": None
+            "images": []
         }, headers=auth_headers)
 
         assert response.status_code == 400
         error_data = response.json()
-        # Проверяем структуру ошибки (может быть detail или на верхнем уровне)
-        if "detail" in error_data:
-            assert error_data["detail"]["code"] == "INVALID_REQUEST"
-        else:
-            assert error_data["code"] == "INVALID_REQUEST"
+        # Проверяем структуру ошибки - flat формат без ["detail"]
+        assert error_data["code"] == "INVALID_REQUEST"
 
     def test_missing_price_returns_400(
         self, client, auth_headers, test_product_created
@@ -282,7 +287,9 @@ class TestB2B02CreateSKU:
             "name": "256GB Black",
             "cost_price": 9500000,
             "discount": 0,
-            "image": "/s3/test.jpg"
+            "images": [
+                {"url": "/s3/test.jpg", "ordering": 0}
+            ]
         }, headers=auth_headers)
 
         # Pydantic возвращает 422 для missing required fields
@@ -291,23 +298,21 @@ class TestB2B02CreateSKU:
     def test_price_zero_returns_400(
         self, client, auth_headers, test_product_created
     ):
-        """Сценарий 6: price = 0 → 400"""
+        """Сценарий 6: price = 0 теперь разрешён (discounted/distressed SKU)"""
+        # price=0 теперь допустим согласно B2B-03 canon (distressed/discounted SKU)
         response = client.post("/api/v1/skus/", json={
             "product_id": str(test_product_created.id),
             "name": "256GB Black",
             "price": 0,
             "cost_price": 9500000,
             "discount": 0,
-            "image": "/s3/test.jpg"
+            "images": [
+                {"url": "/s3/test.jpg", "ordering": 0}
+            ]
         }, headers=auth_headers)
 
-        assert response.status_code == 400
-        error_data = response.json()
-        # Проверяем структуру ошибки
-        if "detail" in error_data:
-            assert error_data["detail"]["code"] == "INVALID_REQUEST"
-        else:
-            assert error_data["code"] == "INVALID_REQUEST"
+        # price=0 теперь разрешён
+        assert response.status_code == 201
 
     def test_product_not_found_returns_404(
         self, client, auth_headers
@@ -319,12 +324,14 @@ class TestB2B02CreateSKU:
             "price": 12999000,
             "cost_price": 9500000,
             "discount": 0,
-            "image": "/s3/test.jpg"
+            "images": [
+                {"url": "/s3/test.jpg", "ordering": 0}
+            ]
         }, headers=auth_headers)
 
         assert response.status_code == 404
         error_data = response.json()
-        assert error_data["detail"]["code"] == "NOT_FOUND"
+        assert error_data["code"] == "NOT_FOUND"
 
     def test_create_sku_for_others_product_returns_403(
         self, client, auth_headers, test_other_seller_product
@@ -336,10 +343,12 @@ class TestB2B02CreateSKU:
             "price": 12999000,
             "cost_price": 9500000,
             "discount": 0,
-            "image": "/s3/iphone15-black-256.jpg"
+            "images": [
+                {"url": "/s3/iphone15-black-256.jpg", "ordering": 0}
+            ]
         }, headers=auth_headers)
 
         assert response.status_code == 403
         error_data = response.json()
-        assert error_data["detail"]["code"] == "FORBIDDEN"
-        assert "does not belong" in error_data["detail"]["message"].lower()
+        assert error_data["code"] == "FORBIDDEN"
+        assert "does not belong" in error_data["message"].lower()
