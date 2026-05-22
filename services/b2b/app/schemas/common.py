@@ -58,13 +58,15 @@ class SKUInProduct(BaseModel):
     id: UUID
     name: str
     price: int
+    cost_price: int = 0  # Для seller cabinet
     discount: int = 0
     image: Optional[str] = None
-    active_quantity: int = Field(..., alias="activeQuantity")
+    active_quantity: int
+    reserved_quantity: int = 0  # Для seller cabinet
     characteristics: List[CharacteristicValue] = []  # ← без id (для SKU внутри Product)
     
     class Config:
-        populate_by_name = True
+        from_attributes = True
 
 
 class ProductImageCreate(BaseModel):

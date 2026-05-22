@@ -7,12 +7,18 @@ from uuid import UUID
 from app.schemas.common import CharacteristicValue
 
 
+class SKUImageCreate(BaseModel):
+    """Изображение для создания/обновления SKU"""
+    url: str = Field(..., description="Ссылка на изображение в S3")
+    ordering: Optional[int] = Field(0, description="Порядок отображения")
+
+
 class SKUBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
-    price: int = Field(..., ge=1, description="Цена в копейках")
-    cost_price: Optional[int] = Field(None, ge=1, description="Себестоимость в копейках")
+    price: int = Field(..., ge=0, description="Цена в копейках")
+    cost_price: Optional[int] = Field(None, ge=0, description="Себестоимость в копейках")
     discount: int = Field(0, ge=0, description="Скидка в копейках")
-    image: Optional[str] = Field(None, description="Ссылка на изображение в S3")
+    images: List[SKUImageCreate] = Field(default_factory=list, description="Изображения SKU")  # ← ИЗМЕНЕНО
     characteristics: List[CharacteristicValue] = Field(default_factory=list)
 
 
@@ -34,15 +40,15 @@ class SKUCreateWithValidation(SKUCreate):
     @field_validator('price')
     @classmethod
     def validate_price(cls, v: int) -> int:
-        if v <= 0:
-            raise ValueError('price must be a positive integer (kopecks)')
+        if v < 0:
+            raise ValueError('price must be >= 0 (kopecks)')
         return v
-    
+
     @field_validator('cost_price')
     @classmethod
     def validate_cost_price(cls, v: Optional[int]) -> Optional[int]:
-        if v is not None and v <= 0:
-            raise ValueError('cost_price must be a positive integer (kopecks)')
+        if v is not None and v < 0:
+            raise ValueError('cost_price must be >= 0 (kopecks)')
         return v
 
     @field_validator('discount')
@@ -52,11 +58,11 @@ class SKUCreateWithValidation(SKUCreate):
             raise ValueError('discount must be >= 0')
         return v
 
-    @field_validator('image')
+    @field_validator('images')
     @classmethod
-    def validate_image(cls, v: Optional[str]) -> Optional[str]:
-        if not v:
-            raise ValueError('image is required')
+    def validate_images(cls, v: List[SKUImageCreate]) -> List[SKUImageCreate]:  # ← ИЗМЕНЕНО
+        if not v or len(v) == 0:
+            raise ValueError('images is required (at least one image)')
         return v
 
 
@@ -64,10 +70,10 @@ class SKUCreateWithValidation(SKUCreate):
 class SKUUpdate(BaseModel):
     """Схема для обновления SKU (все поля опциональные)"""
     name: Optional[str] = Field(None, min_length=1, max_length=255)
-    price: Optional[int] = Field(None, ge=1)
-    cost_price: Optional[int] = Field(None, ge=1)
+    price: Optional[int] = Field(None, ge=0)
+    cost_price: Optional[int] = Field(None, ge=0)
     discount: Optional[int] = Field(None, ge=0)
-    image: Optional[str] = None
+    images: Optional[List[SKUImageCreate]] = None  # ← ИЗМЕНЕНО
     characteristics: Optional[List[CharacteristicValue]] = None
 
 
@@ -86,15 +92,15 @@ class SKUUpdateWithValidation(SKUUpdate):
     @field_validator('price', check_fields=False)
     @classmethod
     def validate_price(cls, v: Optional[int]) -> Optional[int]:
-        if v is not None and v <= 0:
-            raise ValueError('price must be a positive integer (kopecks)')
+        if v is not None and v < 0:
+            raise ValueError('price must be >= 0 (kopecks)')
         return v
 
     @field_validator('cost_price', check_fields=False)
     @classmethod
     def validate_cost_price(cls, v: Optional[int]) -> Optional[int]:
-        if v is not None and v <= 0:
-            raise ValueError('cost_price must be a positive integer (kopecks)')
+        if v is not None and v < 0:
+            raise ValueError('cost_price must be >= 0 (kopecks)')
         return v
 
     @field_validator('discount', check_fields=False)
@@ -102,6 +108,14 @@ class SKUUpdateWithValidation(SKUUpdate):
     def validate_discount(cls, v: Optional[int]) -> Optional[int]:
         if v is not None and v < 0:
             raise ValueError('discount must be >= 0')
+        return v
+
+    # Валидатор для images при обновлении
+    @field_validator('images', check_fields=False)
+    @classmethod
+    def validate_images(cls, v: Optional[List[SKUImageCreate]]) -> Optional[List[SKUImageCreate]]:
+        if v is not None and len(v) == 0:
+            raise ValueError('images must not be empty')
         return v
 
 
@@ -127,7 +141,7 @@ class SKU(SKUBase):
     stock_quantity: int = 0
     active_quantity: int = 0
     reserved_quantity: int = 0
-    images: List[SKUImageResponse] = []
+    images: List[SKUImageResponse] = []  # ← для ответа используется SKUImageResponse
     characteristics: List[SKUCharacteristicResponse] = []
     created_at: datetime
     updated_at: Optional[datetime] = None
@@ -142,7 +156,7 @@ class SKUInProduct(BaseModel):
     name: str
     price: int
     discount: int = 0
-    image: Optional[str] = None
+    images: List[str] = []  # ← для B2C достаточно списка URL
     active_quantity: int = Field(..., alias="activeQuantity")
     characteristics: List[CharacteristicValue] = []
 

@@ -36,6 +36,7 @@ class Product(BaseModel):
     status = Column(String(20), nullable=False, default="CREATED")
     moderation_comment = Column(Text)
     blocking_reason_id = Column(GUID, nullable=True)
+    field_reports_json = Column(JSON, default=list)  # Список field_reports
     
     published_at = Column(DateTime(timezone=True), nullable=True)
     

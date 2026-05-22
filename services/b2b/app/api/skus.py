@@ -16,7 +16,8 @@ from app.schemas.sku import (
     SKUUpdate,
     SKUUpdateWithValidation,
     SKUImageResponse,
-    SKUCharacteristicResponse
+    SKUCharacteristicResponse,
+    SKUImageCreate  # ← добавить импорт
 )
 from app.schemas.common import CharacteristicValueResponse, CharacteristicValue
 from app.schemas.product import ProductStatus
@@ -58,6 +59,9 @@ def send_event_to_moderation_sync(
     """
     import httpx
     from datetime import datetime, timezone
+    import logging
+    
+    logger = logging.getLogger(__name__)
     
     payload: dict = {
         "product_id": str(product_id),
@@ -86,10 +90,14 @@ def send_event_to_moderation_sync(
                 json=event_payload,
                 headers={"X-Service-Key": "b2b-service-key"}
             )
-    except Exception:
+    except Exception as e:
         # fire-and-forget: не блокируем ответ при недоступности Moderation
-        pass
-
+        # Но логируем потерю события для advisory
+        logger.warning(
+            f"Failed to send {event_type} event to Moderation Service: {e}. "
+            f"Event lost: product_id={product_id}, idempotency_key={idempotency_key}"
+        )
+    
 
 @router.post("/", response_model=SKUSchema, status_code=status.HTTP_201_CREATED)
 def create_sku(
@@ -121,18 +129,19 @@ def create_sku(
             detail={"code": "FORBIDDEN", "message": "Product does not belong to you"}
         )
     
-    # 4. Проверяем наличие image в запросе
-    if not sku.image:
-        error_response("INVALID_REQUEST", "image is required", 400)
+    # 4. Проверяем наличие images в запросе (минимум одно)
+    if not sku.images or len(sku.images) == 0:
+        error_response("INVALID_REQUEST", "At least one image is required", 400)
     
-    # 5. Создаём SKU
+    # 5. Создаём SKU (используем URL первого изображения для поля image)
+    first_image = sku.images[0]
     db_sku = SKU(
         product_id=sku.product_id,
         name=sku.name,
         price=sku.price,
         cost_price=sku.cost_price,
         discount=sku.discount,
-        image=sku.image,
+        image=first_image.url,  # ← берём url из SKUImageCreate
         stock_quantity=0,
         active_quantity=0,
         reserved_quantity=0,
@@ -189,13 +198,24 @@ def create_sku(
         price=db_sku.price,
         cost_price=db_sku.cost_price,
         discount=db_sku.discount,
-        image=db_sku.image,
         stock_quantity=db_sku.stock_quantity,
         active_quantity=db_sku.active_quantity,
         reserved_quantity=db_sku.reserved_quantity,
         article=db_sku.article,
-        images=[],
-        characteristics=[],
+        images=[
+            SKUImageResponse(
+                id=uuid_module.uuid4(),  # ← генерируем ID для изображения
+                url=img.url,
+                ordering=img.ordering or 0
+            ) for img in sku.images  # ← теперь перебираем все изображения
+        ],
+        characteristics=[
+            SKUCharacteristicResponse(
+                id=uuid_module.uuid4(),
+                name=char.name,
+                value=char.value
+            ) for char in sku.characteristics
+        ],
         created_at=db_sku.created_at,
         updated_at=db_sku.updated_at
     )
@@ -249,6 +269,10 @@ def update_sku(
                     value_string=char.value
                 )
                 db.add(db_char)
+        elif field == 'images' and value is not None:
+            # Обновляем основное изображение (берем первое)
+            if len(value) > 0:
+                db_sku.image = value[0].url
         elif value is not None:
             setattr(db_sku, field, value)
     
@@ -295,7 +319,7 @@ def update_sku(
             category_id=product.category_id
         )
     
-    # 11. Формируем ответ (используем SKUSchema как в OpenAPI SKUResponse)
+    # 11. Формируем ответ с реальными данными из БД
     return SKUSchema(
         id=db_sku.id,
         product_id=db_sku.product_id,
@@ -303,26 +327,51 @@ def update_sku(
         price=db_sku.price,
         cost_price=db_sku.cost_price,
         discount=db_sku.discount,
-        image=db_sku.image,
         stock_quantity=db_sku.stock_quantity,
         active_quantity=db_sku.active_quantity,
         reserved_quantity=db_sku.reserved_quantity,
         article=db_sku.article,
-        images=[],
-        characteristics=[],
+        images=[
+            SKUImageResponse(
+                id=uuid_module.uuid4(),
+                url=db_sku.image or "",
+                ordering=0
+            )
+        ] if db_sku.image else [],
+        characteristics=[
+            SKUCharacteristicResponse(
+                id=char.id,
+                name="Characteristic",
+                value=char.value_string or ""
+            ) for char in db_sku.characteristics
+        ],
         created_at=db_sku.created_at,
         updated_at=db_sku.updated_at
     )
 
 
 @router.delete("/{sku_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_sku(sku_id: UUID, db: Session = Depends(get_db)):
-    """Удалить SKU"""
+def delete_sku(
+    sku_id: UUID,
+    db: Session = Depends(get_db),
+    current_seller: Seller = Depends(get_current_seller)
+):
     sku = db.query(SKU).filter(SKU.id == sku_id).first()
     if not sku:
+        raise HTTPException(404, detail={"code": "NOT_FOUND", "message": "SKU not found"})
+    
+    product = db.query(Product).filter(Product.id == sku.product_id).first()
+    if not product:
+        raise HTTPException(404, detail={"code": "NOT_FOUND", "message": "Product not found"})
+    
+    if product.seller_id != current_seller.id:
+        raise HTTPException(403, detail={"code": "NOT_OWNER", "message": "SKU does not belong to you"})
+    
+    # проверка активных резервов
+    if sku.reserved_quantity > 0:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="SKU не найден"
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "CONFLICT", "message": "Cannot delete SKU with active reserves"}
         )
     
     db.delete(sku)
@@ -330,21 +379,61 @@ def delete_sku(sku_id: UUID, db: Session = Depends(get_db)):
     return None
 
 
-
-
-
 @router.put("/{sku_id}/quantity", response_model=SKUSchema)
 def update_sku_quantity(
     sku_id: UUID,
     quantity: int,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_seller: Seller = Depends(get_current_seller)
 ):
-    """Обновить остаток SKU вручную"""
+    """Обновить остаток SKU вручную (только свой SKU)"""
+    # Проверяем существование SKU
     sku = db.query(SKU).filter(SKU.id == sku_id).first()
     if not sku:
-        raise HTTPException(status_code=404, detail="SKU не найден")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "NOT_FOUND", "message": "SKU not found"}
+        )
     
-    sku.quantity = quantity
+    # Проверяем родительский товар
+    product = db.query(Product).filter(Product.id == sku.product_id).first()
+    if not product:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "NOT_FOUND", "message": "Product not found"}
+        )
+    
+    # Проверяем, что товар принадлежит текущему продавцу
+    if product.seller_id != current_seller.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "NOT_OWNER", "message": "SKU does not belong to you"}
+        )
+    
+    sku.stock_quantity = quantity
     db.commit()
     db.refresh(sku)
-    return sku
+    
+    # Формируем ответ
+    return SKUSchema(
+        id=sku.id,
+        product_id=sku.product_id,
+        name=sku.name,
+        price=sku.price,
+        cost_price=sku.cost_price,
+        discount=sku.discount,
+        stock_quantity=sku.stock_quantity,
+        active_quantity=sku.active_quantity,
+        reserved_quantity=sku.reserved_quantity,
+        article=sku.article,
+        images=[
+            SKUImageResponse(
+                id=uuid_module.uuid4(),
+                url=sku.image or "",
+                ordering=0
+            )
+        ] if sku.image else [],
+        characteristics=[],
+        created_at=sku.created_at,
+        updated_at=sku.updated_at
+    )

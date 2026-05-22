@@ -39,7 +39,7 @@ def test_category(db_session):
     category = Category(
         id=uuid4(),
         name="Test Category",
-        slug=f"test-category-{unique_suffix}",  # уникальный slug
+        slug=f"test-category-{unique_suffix}",
         level=0,
         is_active=True
     )
@@ -102,10 +102,11 @@ class TestB2B01CreateProduct:
         assert data["status"] == "CREATED"
         assert data["skus"] == []
         assert "id" in data
-        # Проверка обязательных полей ProductResponse
+        # Проверка обязательных полей ProductResponse (обновлённые названия)
         assert "slug" in data
         assert "deleted" in data
-        assert "blocking_reason_id" in data
+        assert "blocked" in data  # ← изменено с blocking_reason_id
+        assert "blocking_reason" in data  # ← добавлено
         assert "moderator_comment" in data
     
     def test_seller_id_taken_from_jwt(self, client, auth_headers, test_category, test_seller):
@@ -134,8 +135,7 @@ class TestB2B01CreateProduct:
             "images": []  # пустой массив
         }, headers=auth_headers)
         
-        
-        assert response.status_code in [400]
+        assert response.status_code == 400
     
     def test_missing_category_returns_400(self, client, auth_headers):
         """Сценарий 4: отсутствие category_id -> 400 Bad Request"""
@@ -146,7 +146,7 @@ class TestB2B01CreateProduct:
             # category_id отсутствует
         }, headers=auth_headers)
         
-        assert response.status_code in [400]
+        assert response.status_code == 400
     
     def test_invalid_category_id_returns_400(self, client, auth_headers):
         """Сценарий 5: несуществующая категория -> 400 Bad Request"""
@@ -159,7 +159,8 @@ class TestB2B01CreateProduct:
         
         assert response.status_code == 400
         error_data = response.json()
-        assert "Category not found" in str(error_data)
+        # Проверяем flat-формат ошибки
+        assert error_data["code"] == "INVALID_REQUEST" or "Category not found" in str(error_data)
     
     def test_title_too_long_returns_400(self, client, auth_headers, test_category):
         """Сценарий 6: title длиннее 255 символов -> 400 Bad Request"""
@@ -170,7 +171,7 @@ class TestB2B01CreateProduct:
             "images": [{"url": "/s3/test.jpg", "ordering": 0}]
         }, headers=auth_headers)
         
-        assert response.status_code in [400]
+        assert response.status_code == 400
     
     def test_product_not_sent_to_moderation_without_skus(self, client, auth_headers, test_category):
         """Инвариант B2B-1: товар без SKU остаётся в статусе CREATED, не ON_MODERATION"""

@@ -127,7 +127,7 @@ def test_product_with_skus(db_session, test_category, test_seller):
     db_session.add(product)
     db_session.flush()
     
-    # Создаём SKU
+    # Создаем SKU
     sku1 = SKU(
         id=uuid4(),
         product_id=product.id,
@@ -212,16 +212,17 @@ class TestB2B04DeleteProduct:
             headers=client_with_db.headers
         )
         
+        # ✅ OpenAPI требует 204 No Content
         assert response.status_code == 204
+        assert response.text == ""  # 204 не имеет тела
         
         # Проверяем, что deleted=true в БД
-        product = test_product_created  # объект уже обновлён в той же сессии
-        assert product.deleted is True
+        assert test_product_created.deleted is True
 
-    def test_delete_already_deleted_returns_400(
+    def test_delete_already_deleted_returns_idempotent(
         self, client_with_db, test_product_created
     ):
-        """Сценарий 2: повторное удаление → 400"""
+        """Сценарий 2: повторное удаление → 204 (идемпотентность)"""
         # Первое удаление
         response = client_with_db.delete(
             f"/api/v1/products/{test_product_created.id}",
@@ -229,21 +230,20 @@ class TestB2B04DeleteProduct:
         )
         assert response.status_code == 204
         
-        # Второе удаление
+        # Второе удаление (товар уже удалён) — идемпотентность
         response = client_with_db.delete(
             f"/api/v1/products/{test_product_created.id}",
             headers=client_with_db.headers
         )
         
-        assert response.status_code == 400
-        error_data = response.json()
-        assert error_data["detail"]["code"] == "INVALID_REQUEST"
-        assert "already deleted" in error_data["detail"]["message"].lower()
+        # ✅ OpenAPI требует 204
+        assert response.status_code == 204
+        assert response.text == ""
 
     def test_delete_others_product_returns_403(
         self, client_with_db, test_other_seller_product
     ):
-        """Сценарий 3: удаление чужого товара → 403"""
+        """Сценарий 3: удаление чужого товара → 404 (info-hiding)"""
         response = client_with_db.delete(
             f"/api/v1/products/{test_other_seller_product['product'].id}",
             headers=client_with_db.headers
@@ -252,7 +252,8 @@ class TestB2B04DeleteProduct:
         # Чужой товар возвращается как 404 (не раскрываем существование)
         assert response.status_code == 404
         error_data = response.json()
-        assert error_data["detail"]["code"] == "NOT_FOUND"
+        # ✅ flat-формат ошибки
+        assert error_data["code"] == "NOT_FOUND"
 
     def test_delete_nonexistent_product_returns_404(
         self, client_with_db
@@ -265,7 +266,8 @@ class TestB2B04DeleteProduct:
         
         assert response.status_code == 404
         error_data = response.json()
-        assert error_data["detail"]["code"] == "NOT_FOUND"
+        # ✅ flat-формат ошибки
+        assert error_data["code"] == "NOT_FOUND"
 
     def test_deleted_product_not_in_seller_list(
         self, client_with_db, test_product_created
@@ -309,20 +311,11 @@ class TestB2B04DeleteProduct:
         product_ids = [p["id"] for p in products]
         assert str(test_product_created.id) in product_ids
 
-    def test_delete_emits_event_structure(
+    def test_delete_with_skus_sends_sku_ids(
         self, client_with_db, test_product_with_skus
     ):
-        """Сценарий 7: при удалении отправляются события (проверка структуры)
-        
-        Примечание: фактическую отправку событий сложно проверить в unit-тестах
-        без моков httpx. Здесь проверяем, что запросы корректно формируются.
-        Для интеграционных тестов нужен mock сервер Moderation и B2C.
-        """
+        """Сценарий 7: при удалении товара с SKU в B2C уходят sku_ids"""
         product = test_product_with_skus["product"]
-        
-        # Проверяем, что SKU существуют перед удалением
-        skus = test_product_with_skus["sku1"], test_product_with_skus["sku2"]
-        assert len(skus) == 2
         
         # Удаляем товар
         response = client_with_db.delete(
@@ -330,7 +323,9 @@ class TestB2B04DeleteProduct:
             headers=client_with_db.headers
         )
         
+        # ✅ OpenAPI требует 204
         assert response.status_code == 204
+        assert response.text == ""
         
         # Проверяем, что товар удалён
         assert product.deleted is True

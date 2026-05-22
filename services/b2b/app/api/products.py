@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Header
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from uuid import UUID
 import json
+import uuid as uuid_module
 import uuid
-
+import os
 from app.database import get_db
 from app.models.category import Category
 from app.models.product import Product, ProductImage
@@ -17,12 +18,20 @@ from app.schemas.product import (
     ProductStatus,
     CharacteristicValue,
     ImageResponse,
-    Product as ProductSchema
+    Product as ProductSchema,
+    BlockingReason,
+    FieldReport
 )
 from app.schemas.common import CategoryRef, SKUInProduct, CharacteristicValueResponse, ProductImageResponse
-from app.dependencies.auth import get_current_seller  # ← реальная JWT аутентификация
+from app.dependencies.auth import get_current_seller, get_current_seller_optional  # ← реальная JWT аутентификация
 
 router = APIRouter()
+
+def verify_service_key(x_service_key: Optional[str]) -> bool:
+    """Проверяет валидность X-Service-Key для межсервисных вызовов"""
+    expected_key = os.getenv("B2B_SERVICE_KEY", "b2b-service-key")
+    return x_service_key == expected_key
+
 
 
 def error_response(code: str, message: str, status_code: int = 422):
@@ -30,7 +39,123 @@ def error_response(code: str, message: str, status_code: int = 422):
         status_code=status_code,
         detail={"code": code, "message": message}
     )
+def product_to_full_response(product: Product, db: Session) -> ProductResponse:
+    """Преобразует Product в полный ProductResponse (с cost_price, reserved_quantity)"""
+    # Формируем blocking_reason
+    blocking_reason = None
+    if product.blocked and product.blocking_reason_id:
+        blocking_reason = BlockingReason(
+            id=product.blocking_reason_id,
+            title="Товар заблокирован модерацией",
+            comment=product.moderation_comment
+        )
+    
+    # Формируем field_reports
+    field_reports = []
+    if hasattr(product, 'field_reports_json') and product.field_reports_json:
+        for fr in product.field_reports_json:
+            field_reports.append(FieldReport(
+                field_name=fr.get("field_name", ""),
+                sku_id=UUID(fr["sku_id"]) if fr.get("sku_id") else None,
+                comment=fr.get("comment", "")
+            ))
+    
+    # Формируем SKU с полными данными
+    skus = []
+    for sku in product.skus:
+        skus.append(SKUInProduct(
+            id=sku.id,
+            name=sku.name,
+            price=sku.price,
+            cost_price=sku.cost_price or 0,
+            discount=sku.discount or 0,
+            image=sku.image or "",
+            active_quantity=sku.active_quantity,
+            reserved_quantity=sku.reserved_quantity,
+            characteristics=[]
+        ))
+    
+    return ProductResponse(
+        id=product.id,
+        seller_id=product.seller_id,
+        category_id=product.category_id,
+        title=product.title,
+        slug=product.slug or "",
+        description=product.description or "",
+        status=ProductStatus(product.status),
+        deleted=product.deleted,
+        blocked=product.blocked,
+        blocking_reason=blocking_reason,
+        field_reports=field_reports,
+        moderator_comment=product.moderation_comment,
+        images=[
+            ProductImageResponse(
+                id=img.id,
+                url=img.url,
+                ordering=img.sort_order
+            ) for img in product.images
+        ],
+        characteristics=[
+            CharacteristicValueResponse(
+                id=uuid.uuid4(),
+                name=char["name"],
+                value=char["value"]
+            ) for char in (product.characteristics_json or [])
+        ],
+        skus=skus,
+        created_at=product.created_at,
+        updated_at=product.updated_at
+    )
 
+
+def product_to_public_response(product: Product, db: Session) -> ProductResponse:
+    """Преобразует Product в публичный ProductResponse (без cost_price, reserved_quantity)"""
+    # Формируем SKU без чувствительных полей
+    skus = []
+    for sku in product.skus:
+        skus.append(SKUInProduct(
+            id=sku.id,
+            name=sku.name,
+            price=sku.price,
+            cost_price=None,  # не показываем
+            discount=sku.discount or 0,
+            image=sku.image or "",
+            active_quantity=sku.active_quantity,
+            reserved_quantity=None,  # не показываем
+            characteristics=[]
+        ))
+    
+    return ProductResponse(
+        id=product.id,
+        seller_id=product.seller_id,
+        category_id=product.category_id,
+        title=product.title,
+        slug=product.slug or "",
+        description=product.description or "",
+        status=ProductStatus(product.status),
+        deleted=product.deleted,
+        blocked=product.blocked,
+        blocking_reason=None,  # в публичном режиме не показываем
+        field_reports=[],  # в публичном режиме не показываем
+        moderator_comment=product.moderation_comment,
+        images=[
+            ProductImageResponse(
+                id=img.id,
+                url=img.url,
+                ordering=img.sort_order
+            ) for img in product.images
+        ],
+        characteristics=[
+            CharacteristicValueResponse(
+                id=uuid.uuid4(),
+                name=char["name"],
+                value=char["value"]
+            ) for char in (product.characteristics_json or [])
+        ],
+        skus=skus,
+        created_at=product.created_at,
+        updated_at=product.updated_at
+    )
 
 def send_event_to_moderation_sync(
     product_id: UUID, 
@@ -57,6 +182,9 @@ def send_event_to_moderation_sync(
     """
     import httpx
     from datetime import datetime, timezone
+    import logging
+    
+    logger = logging.getLogger(__name__)
     
     payload: dict = {
         "product_id": str(product_id),
@@ -85,9 +213,13 @@ def send_event_to_moderation_sync(
                 json=event_payload,
                 headers={"X-Service-Key": "b2b-service-key"}
             )
-    except Exception:
+    except Exception as e:
         # fire-and-forget: не блокируем ответ при недоступности Moderation
-        pass
+        # Но логируем потерю события для advisory
+        logger.warning(
+            f"Failed to send {event_type} event to Moderation Service: {e}. "
+            f"Event lost: product_id={product_id}, idempotency_key={idempotency_key}"
+        )
     
 
 def send_event_to_b2c_sync(
@@ -98,18 +230,23 @@ def send_event_to_b2c_sync(
     event_type: str = "PRODUCT_DELETED"
 ):
     """
-    Отправляет событие (PRODUCT_DELETED) в B2C Service синхронно.
+    Отправляет событие (PRODUCT_DELETED, PRODUCT_BLOCKED и т.п.) в B2C Service.
     
     Соответствует спецификации neomarket-b2c.yaml:
     - URL: POST /api/v1/b2b/events
-    - Тело: {event_type, idempotency_key, occurred_at, payload}
-    - payload: EventProductRef {product_id, reason?}
+    - Тело: B2BEvent (event_type, idempotency_key, occurred_at, payload)
     
-    Примечание: B2C сам определяет SKU по product_id при обработке события.
+    event_type: "PRODUCT_DELETED", "PRODUCT_BLOCKED", "PRODUCT_HARD_BLOCKED", ...
+    payload:
+      - PRODUCT_DELETED: {product_id}
     """
     import httpx
     from datetime import datetime, timezone
+    import logging
     
+    logger = logging.getLogger(__name__)
+    
+    # Payload соответствует EventProductRef для PRODUCT_DELETED
     payload = {
         "product_id": str(product_id)
     }
@@ -128,9 +265,11 @@ def send_event_to_b2c_sync(
                 json=event_payload,
                 headers={"X-Service-Key": "b2b-to-b2c-key"}
             )
-    except Exception:
-        # fire-and-forget: не блокируем ответ при недоступности B2C
-        pass
+    except Exception as e:
+        logger.warning(
+            f"Failed to send {event_type} event to B2C Service: {e}. "
+            f"Event lost: product_id={product_id}, idempotency_key={idempotency_key}"
+        )
     
 
 @router.post("/", response_model=ProductResponse, status_code=status.HTTP_201_CREATED)
@@ -171,7 +310,7 @@ def create_product(
     )
     db.add(db_product)
     db.flush()
-
+    
     # 5. Сохранение изображений
     for img in product.images:
         db_image = ProductImage(
@@ -214,7 +353,7 @@ def create_product(
         created_at=db_product.created_at,
         updated_at=db_product.updated_at
     )
-
+    
 @router.get("/", response_model=List[ProductSchema])
 def get_products(
     skip: int = 0,
@@ -250,46 +389,68 @@ def get_products(
     return products
 
 
-@router.get("/{product_id}", response_model=ProductSchema)
+@router.get("/{product_id}", response_model=ProductResponse)
 def get_product(
-    product_id: UUID, 
+    product_id: UUID,
+    x_service_key: Optional[str] = Header(None, alias="X-Service-Key"),
     db: Session = Depends(get_db),
-    current_seller: Seller = Depends(get_current_seller)  # ← авторизация
+    current_seller: Optional[Seller] = Depends(get_current_seller_optional)  # новый dependency
 ):
-    """Получить товар по ID (только свои товары)"""
-    product = db.query(Product).filter(
-        Product.id == product_id,
-        Product.seller_id == current_seller.id  # ← проверка владельца
-    ).first()
+    """
+    Получить карточку товара.
     
-    if not product:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": "NOT_FOUND", "message": "Product not found"}
-        )
-    return product
+    Режимы вызова:
+    1. Seller cabinet (Bearer JWT) — полные данные с cost_price/reserved_quantity
+    2. Service call (X-Service-Key) — публичные данные без чувствительных полей
+    
+    IDOR: при JWT проверяется seller_id, при X-Service-Key — нет
+    """
+    is_service_call = x_service_key is not None and verify_service_key(x_service_key)
+    
+    # Определяем, какой режим используем
+    if is_service_call:
+        # Сервисный режим — без проверки seller_id
+        product = db.query(Product).filter(Product.id == product_id).first()
+        if not product:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "NOT_FOUND", "message": "Product not found"}
+            )
+        # Возвращаем публичные данные
+        return product_to_public_response(product, db)
+    else:
+        # Seller режим — проверяем seller_id из JWT
+        if current_seller is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail={"code": "UNAUTHORIZED", "message": "Authentication required"}
+            )
+        
+        product = db.query(Product).filter(
+            Product.id == product_id,
+            Product.seller_id == current_seller.id
+        ).first()
+        
+        if not product:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"code": "NOT_FOUND", "message": "Product not found"}
+            )
+        
+        # Возвращаем полные данные
+        return product_to_full_response(product, db)
     
 
 @router.patch("/{product_id}", response_model=ProductResponse, status_code=status.HTTP_200_OK)
 def update_product(
-    product_id: UUID,
+    product_id: UUID, 
     product_update: ProductUpdate,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_seller: Seller = Depends(get_current_seller)
 ):
-    """
-    Обновить товар (только свои товары).
-    
-    Побочные эффекты:
-    - Если товар в статусе MODERATED или BLOCKED → товар переходит в ON_MODERATION
-    - Отправляется событие EDITED в Moderation Service (всегда при редактировании)
-    """
-    # 1. Проверяем существование товара
-    product = db.query(Product).filter(
-        Product.id == product_id,
-        Product.seller_id == current_seller.id
-    ).first()
+    # 1. Проверяем, существует ли товар вообще
+    product = db.query(Product).filter(Product.id == product_id).first()
     
     if not product:
         raise HTTPException(
@@ -297,7 +458,14 @@ def update_product(
             detail={"code": "NOT_FOUND", "message": "Product not found"}
         )
     
-    # 2. Проверяем, что товар не в статусе HARD_BLOCKED
+    # 2. Проверяем ownership (чужой товар → 403)
+    if product.seller_id != current_seller.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "FORBIDDEN", "message": "Product does not belong to you"}
+        )
+    
+    # 3. Проверяем HARD_BLOCKED
     if product.status == ProductStatus.HARD_BLOCKED.value:
         error_response("FORBIDDEN", "Cannot edit hard-blocked product", 403)
     
@@ -351,7 +519,20 @@ def update_product(
             category_id=product.category_id
         )
     
-    # Формируем ответ (по спецификации neomarket-b2b.yaml)
+    # Формируем ответ с реальными данными из БД
+    # Загружаем SKUs из БД
+    skus = [
+        SKUInProduct(
+            id=sku.id,
+            name=sku.name,
+            price=sku.price,
+            discount=sku.discount,
+            image=sku.image,
+            active_quantity=sku.active_quantity,
+            characteristics=[]
+        ) for sku in product.skus
+    ]
+    
     return ProductResponse(
         id=product.id,
         seller_id=product.seller_id,
@@ -377,7 +558,7 @@ def update_product(
                 value=char["value"]
             ) for char in (product.characteristics_json or [])
         ],
-        skus=[],
+        skus=skus,
         created_at=product.created_at,
         updated_at=product.updated_at
     )
@@ -390,23 +571,8 @@ def delete_product(
     db: Session = Depends(get_db),
     current_seller: Seller = Depends(get_current_seller)
 ):
-    """
-    Удалить товар (мягкое удаление).
-    
-    Побочные эффекты:
-    - Устанавливает deleted = true в БД
-    - Отправляет событие DELETED в Moderation Service
-    - Отправляет событие PRODUCT_DELETED в B2C Service (со списком sku_ids)
-    
-    Ошибки:
-    - 404: товар не найден
-    - 400: товар уже удалён
-    """
-    # 1. Проверяем существование товара (с проверкой ownership)
-    product = db.query(Product).filter(
-        Product.id == product_id,
-        Product.seller_id == current_seller.id
-    ).first()
+    # 1. Проверяем, существует ли товар вообще
+    product = db.query(Product).filter(Product.id == product_id).first()
     
     if not product:
         raise HTTPException(
@@ -414,23 +580,27 @@ def delete_product(
             detail={"code": "NOT_FOUND", "message": "Product not found"}
         )
     
-    # 2. Проверка на повторное удаление
-    if product.deleted:
+    # 2. Проверяем ownership (чужой товар → 403)
+    if product.seller_id != current_seller.id:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"code": "INVALID_REQUEST", "message": "Product already deleted"}
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "FORBIDDEN", "message": "Product does not belong to you"}
         )
     
-    # 3. Получаем sku_ids для события в B2C
+    # 3. Если товар уже удалён — возвращаем 204 (идемпотентность)
+    if product.deleted:
+        return None
+    
+    # 4. Получаем sku_ids для события в B2C
     skus = db.query(SKU).filter(SKU.product_id == product_id).all()
     sku_ids = [sku.id for sku in skus]
     
-    # 4. Мягкое удаление
+    # 5. Мягкое удаление
     product.deleted = True
     db.commit()
     db.refresh(product)
     
-    # 5. Отправляем событие DELETED в Moderation (background task)
+    # 6. Отправляем событие DELETED в Moderation
     import uuid as uuid_module
     moderation_idempotency_key = uuid_module.uuid4()
     background_tasks.add_task(
@@ -439,24 +609,12 @@ def delete_product(
         seller_id=product.seller_id,
         idempotency_key=moderation_idempotency_key,
         event_type="PRODUCT_DELETED",
-        json_before={
-            "product_id": str(product.id),
-            "seller_id": str(product.seller_id),
-            "title": product.title,
-            "status": product.status,
-            "deleted": False
-        },
-        json_after={
-            "product_id": str(product.id),
-            "seller_id": str(product.seller_id),
-            "title": product.title,
-            "status": product.status,
-            "deleted": True
-        },
+        json_before={"deleted": False},
+        json_after={"deleted": True},
         category_id=product.category_id
     )
     
-    # 6. Отправляем событие PRODUCT_DELETED в B2C (background task)
+    # 7. Отправляем событие PRODUCT_DELETED в B2C
     b2c_idempotency_key = uuid_module.uuid4()
     background_tasks.add_task(
         send_event_to_b2c_sync,

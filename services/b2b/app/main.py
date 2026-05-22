@@ -2,6 +2,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI, status
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api import router as api_router
 from app.api.auth import router as auth_router  
@@ -39,6 +40,28 @@ async def validation_exception_handler(request, exc):
         content={
             "code": "INVALID_REQUEST",
             "message": error_messages[0] if error_messages else "Validation error"
+        }
+    )
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request, exc: StarletteHTTPException):
+    """
+    Глобальный обработчик HTTPException для возврата flat-формата ошибок.
+    Возвращает {"code": "...", "message": "..."} вместо {"detail": {...}}.
+    """
+    # Проверяем, есть ли уже detail в формате {"code", "message"}
+    if hasattr(exc, 'detail') and isinstance(exc.detail, dict):
+        if "code" in exc.detail and "message" in exc.detail:
+            return JSONResponse(
+                status_code=exc.status_code,
+                content=exc.detail
+            )
+    # Если detail не в нужном формате, оборачиваем
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "code": getattr(exc, 'code', f"HTTP_{exc.status_code}"),
+            "message": str(exc.detail) if isinstance(exc.detail, str) else "An error occurred"
         }
     )
 
