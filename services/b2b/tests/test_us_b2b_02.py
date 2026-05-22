@@ -5,6 +5,7 @@ import pytest
 from uuid import uuid4
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
+from unittest.mock import patch, MagicMock
 
 from app.main import app
 from app.database import get_db
@@ -260,10 +261,10 @@ class TestB2B02CreateSKU:
         assert error_data["code"] == "FORBIDDEN"
         assert "hard-blocked" in error_data["message"].lower()
 
-    def test_missing_image_returns_400(
+    def test_missing_image_returns_422(
         self, client, auth_headers, test_product_created
     ):
-        """Сценарий 4: отсутствие images → 400"""
+        """Сценарий 4: отсутствие images → 422 Validation Error (Pydantic)"""
         response = client.post("/api/v1/skus/", json={
             "product_id": str(test_product_created.id),
             "name": "256GB Black",
@@ -273,15 +274,16 @@ class TestB2B02CreateSKU:
             "images": []
         }, headers=auth_headers)
 
-        assert response.status_code == 400
+        # Pydantic validation error → 422
+        assert response.status_code == 422
         error_data = response.json()
-        # Проверяем структуру ошибки - flat формат без ["detail"]
+        # Проверяем flat-формат ошибки
         assert error_data["code"] == "INVALID_REQUEST"
 
-    def test_missing_price_returns_400(
+    def test_missing_price_returns_422(
         self, client, auth_headers, test_product_created
     ):
-        """Сценарий 5: отсутствие price → 400"""
+        """Сценарий 5: отсутствие price → 422 Validation Error (Pydantic)"""
         response = client.post("/api/v1/skus/", json={
             "product_id": str(test_product_created.id),
             "name": "256GB Black",
@@ -292,14 +294,13 @@ class TestB2B02CreateSKU:
             ]
         }, headers=auth_headers)
 
-        # Pydantic возвращает 422 для missing required fields
-        assert response.status_code in [400, 422]
+        # Pydantic validation error → 422
+        assert response.status_code == 422
 
-    def test_price_zero_returns_400(
+    def test_price_zero_returns_201(
         self, client, auth_headers, test_product_created
     ):
-        """Сценарий 6: price = 0 теперь разрешён (discounted/distressed SKU)"""
-        # price=0 теперь допустим согласно B2B-03 canon (distressed/discounted SKU)
+        """Сценарий 6: price = 0 разрешён (distressed/discounted SKU)"""
         response = client.post("/api/v1/skus/", json={
             "product_id": str(test_product_created.id),
             "name": "256GB Black",
@@ -311,7 +312,7 @@ class TestB2B02CreateSKU:
             ]
         }, headers=auth_headers)
 
-        # price=0 теперь разрешён
+        # price=0 разрешён по OpenAPI
         assert response.status_code == 201
 
     def test_product_not_found_returns_404(
@@ -352,3 +353,49 @@ class TestB2B02CreateSKU:
         error_data = response.json()
         assert error_data["code"] == "FORBIDDEN"
         assert "does not belong" in error_data["message"].lower()
+    
+    def test_first_sku_sends_created_event_to_moderation(
+        self, client, auth_headers, test_product_created
+    ):
+        """Проверка: первый SKU отправляет событие CREATED в Moderation"""
+        import httpx
+        
+        with patch.object(httpx, 'Client') as mock_client_class:
+            mock_client = MagicMock()
+            mock_post = MagicMock()
+            mock_client.post = mock_post
+            mock_client_class.return_value.__enter__.return_value = mock_client
+            
+            response = client.post("/api/v1/skus/", json={
+                "product_id": str(test_product_created.id),
+                "name": "256GB Black",
+                "price": 12999000,
+                "cost_price": 9500000,
+                "discount": 0,
+                "images": [{"url": "/s3/test.jpg", "ordering": 0}]
+            }, headers=auth_headers)
+            
+            assert response.status_code == 201
+            
+            # Проверяем, что POST был вызван
+            mock_post.assert_called_once()
+            
+            # Проверяем URL
+            call_args = mock_post.call_args
+            assert call_args[0][0] == "http://moderation:8000/api/v1/b2b/events"
+            
+            # Проверяем заголовки
+            headers = call_args[1]["headers"]
+            assert headers["X-Service-Key"] == "b2b-service-key"
+            
+            # Проверяем тело запроса
+            request_body = call_args[1]["json"]
+            assert request_body["event_type"] == "PRODUCT_CREATED"
+            assert "idempotency_key" in request_body
+            assert "occurred_at" in request_body
+            
+            # Проверяем payload
+            payload = request_body["payload"]
+            assert payload["product_id"] == str(test_product_created.id)
+            assert payload["seller_id"] == str(test_product_created.seller_id)
+            assert "json_after" in payload
