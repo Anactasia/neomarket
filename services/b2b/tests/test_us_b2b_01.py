@@ -105,8 +105,8 @@ class TestB2B01CreateProduct:
         # Проверка обязательных полей ProductResponse (обновлённые названия)
         assert "slug" in data
         assert "deleted" in data
-        assert "blocked" in data  # ← изменено с blocking_reason_id
-        assert "blocking_reason" in data  # ← добавлено
+        assert "blocked" in data
+        assert "blocking_reason" in data
         assert "moderator_comment" in data
     
     def test_seller_id_taken_from_jwt(self, client, auth_headers, test_category, test_seller):
@@ -127,7 +127,7 @@ class TestB2B01CreateProduct:
         assert get_response.json()["seller_id"] == str(test_seller.id)
     
     def test_missing_images_returns_400(self, client, auth_headers, test_category):
-        """Сценарий 3: отсутствие images -> 400 Bad Request"""
+        """Сценарий 3: отсутствие images -> 400 Bad Request (бизнес-ошибка)"""
         response = client.post("/api/v1/products/", json={
             "title": "Test Product",
             "description": "Test Description",
@@ -137,8 +137,8 @@ class TestB2B01CreateProduct:
         
         assert response.status_code == 400
     
-    def test_missing_category_returns_400(self, client, auth_headers):
-        """Сценарий 4: отсутствие category_id -> 400 Bad Request"""
+    def test_missing_category_returns_422(self, client, auth_headers):
+        """Сценарий 4: отсутствие category_id -> 422 Validation Error (Pydantic)"""
         response = client.post("/api/v1/products/", json={
             "title": "Test Product",
             "description": "Test Description",
@@ -146,10 +146,11 @@ class TestB2B01CreateProduct:
             # category_id отсутствует
         }, headers=auth_headers)
         
-        assert response.status_code == 400
+        # Pydantic validation error → 422
+        assert response.status_code == 422
     
     def test_invalid_category_id_returns_400(self, client, auth_headers):
-        """Сценарий 5: несуществующая категория -> 400 Bad Request"""
+        """Сценарий 5: несуществующая категория -> 400 Bad Request (бизнес-ошибка)"""
         response = client.post("/api/v1/products/", json={
             "title": "Test Product",
             "description": "Test Description",
@@ -162,8 +163,8 @@ class TestB2B01CreateProduct:
         # Проверяем flat-формат ошибки
         assert error_data["code"] == "INVALID_REQUEST" or "Category not found" in str(error_data)
     
-    def test_title_too_long_returns_400(self, client, auth_headers, test_category):
-        """Сценарий 6: title длиннее 255 символов -> 400 Bad Request"""
+    def test_title_too_long_returns_422(self, client, auth_headers, test_category):
+        """Сценарий 6: title длиннее 255 символов -> 422 Validation Error (Pydantic)"""
         response = client.post("/api/v1/products/", json={
             "title": "A" * 256,
             "description": "Test Description",
@@ -171,7 +172,8 @@ class TestB2B01CreateProduct:
             "images": [{"url": "/s3/test.jpg", "ordering": 0}]
         }, headers=auth_headers)
         
-        assert response.status_code == 400
+        # Pydantic validation error → 422
+        assert response.status_code == 422
     
     def test_product_not_sent_to_moderation_without_skus(self, client, auth_headers, test_category):
         """Инвариант B2B-1: товар без SKU остаётся в статусе CREATED, не ON_MODERATION"""

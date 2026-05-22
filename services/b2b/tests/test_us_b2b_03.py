@@ -5,7 +5,7 @@ import pytest
 from uuid import uuid4
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
-
+from unittest.mock import patch, MagicMock
 from app.main import app
 from app.database import get_db
 from app.models.category import Category
@@ -317,25 +317,17 @@ class TestB2B03EditProduct:
     def test_edit_others_product_returns_403(
         self, client, auth_headers, test_other_seller_product
     ):
-        """Сценарий 4: редактирование чужого товара → 403 NOT_OWNER"""
-        # Для чужих товаров endpoint должен возвращать 404 (чтобы не раскрывать существование)
-        # Но если мы хотим явно проверять NOT_OWNER, нужно изменить подход
-        # В соответствии с OpenAPI: 403 для HARD_BLOCKED и чужого товара
-        # Изменим логику: сначала получаем товар через админский ключ (если бы был)
-        # Или проверяем, что PATCH возвращает 404 (так как товар не найден для этого продавца)
+        """Сценарий 4: редактирование чужого товара → 403 FORBIDDEN"""
         response = client.patch(
             f"/api/v1/products/{test_other_seller_product['product'].id}",
-            json={
-                "title": "Trying to edit someone else's product"
-            },
+            json={"title": "Trying to edit someone else's product"},
             headers=auth_headers
         )
 
-        # В текущей реализации: если товар не найден (из-за фильтра по seller_id),
-        # возвращаем 404. Это тоже безопасно (не раскрываем, что товар существует)
-        assert response.status_code == 404
+        assert response.status_code == 403
         error_data = response.json()
-        assert error_data["code"] == "NOT_FOUND"
+        assert error_data["code"] == "FORBIDDEN"  # ← NOT_FOUND → FORBIDDEN
+        assert "does not belong" in error_data["message"].lower()
 
     def test_edit_created_product_no_status_change(
         self, client, auth_headers, test_product_created
@@ -562,3 +554,38 @@ class TestB2B03EditSKU:
         finally:
             db_session.delete(sku)
             db_session.commit()
+    
+
+    def test_edit_product_sends_edited_event_to_moderation(
+        self, client, auth_headers, test_product_moderated
+    ):
+        """Проверка: редактирование отправляет событие EDITED в Moderation"""
+        import httpx
+        
+        with patch.object(httpx, 'Client') as mock_client_class:
+            mock_client = MagicMock()
+            mock_post = MagicMock()
+            mock_client.post = mock_post
+            mock_client_class.return_value.__enter__.return_value = mock_client
+            
+            response = client.patch(
+                f"/api/v1/products/{test_product_moderated.id}",
+                json={"title": "Updated Title"},
+                headers=auth_headers
+            )
+            
+            assert response.status_code == 200
+            
+            mock_post.assert_called_once()
+            call_args = mock_post.call_args
+            assert call_args[0][0] == "http://moderation:8000/api/v1/b2b/events"
+            
+            request_body = call_args[1]["json"]
+            assert request_body["event_type"] == "PRODUCT_EDITED"
+            assert "idempotency_key" in request_body
+            assert "occurred_at" in request_body
+            
+            payload = request_body["payload"]
+            assert payload["product_id"] == str(test_product_moderated.id)
+            assert "json_before" in payload
+            assert "json_after" in payload

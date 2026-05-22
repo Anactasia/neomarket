@@ -5,7 +5,7 @@ import pytest
 from uuid import uuid4
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
-
+from unittest.mock import patch, MagicMock
 from app.main import app
 from app.database import get_db
 from app.models.category import Category
@@ -212,7 +212,7 @@ class TestB2B04DeleteProduct:
             headers=client_with_db.headers
         )
         
-        # ✅ OpenAPI требует 204 No Content
+        # OpenAPI требует 204 No Content
         assert response.status_code == 204
         assert response.text == ""  # 204 не имеет тела
         
@@ -236,7 +236,7 @@ class TestB2B04DeleteProduct:
             headers=client_with_db.headers
         )
         
-        # ✅ OpenAPI требует 204
+        # OpenAPI требует 204
         assert response.status_code == 204
         assert response.text == ""
 
@@ -249,11 +249,10 @@ class TestB2B04DeleteProduct:
             headers=client_with_db.headers
         )
         
-        # Чужой товар возвращается как 404 (не раскрываем существование)
-        assert response.status_code == 404
+    
+        assert response.status_code == 403  # ← 404 → 403
         error_data = response.json()
-        # ✅ flat-формат ошибки
-        assert error_data["code"] == "NOT_FOUND"
+        assert error_data["code"] == "FORBIDDEN"
 
     def test_delete_nonexistent_product_returns_404(
         self, client_with_db
@@ -266,7 +265,7 @@ class TestB2B04DeleteProduct:
         
         assert response.status_code == 404
         error_data = response.json()
-        # ✅ flat-формат ошибки
+        # flat-формат ошибки
         assert error_data["code"] == "NOT_FOUND"
 
     def test_deleted_product_not_in_seller_list(
@@ -323,9 +322,49 @@ class TestB2B04DeleteProduct:
             headers=client_with_db.headers
         )
         
-        # ✅ OpenAPI требует 204
+        # OpenAPI требует 204
         assert response.status_code == 204
         assert response.text == ""
         
         # Проверяем, что товар удалён
         assert product.deleted is True
+    
+
+    def test_delete_sends_deleted_event_to_moderation(
+        self, client_with_db, test_product_created
+    ):
+        """Проверка: удаление отправляет событие DELETED в Moderation"""
+        import httpx
+        
+        with patch.object(httpx, 'Client') as mock_client_class:
+            mock_client = MagicMock()
+            mock_post = MagicMock()
+            mock_client.post = mock_post
+            mock_client_class.return_value.__enter__.return_value = mock_client
+            
+            response = client_with_db.delete(
+                f"/api/v1/products/{test_product_created.id}",
+                headers=client_with_db.headers
+            )
+            
+            assert response.status_code == 204
+            
+            # Проверяем, что post был вызван (хотя бы один раз)
+            assert mock_post.call_count >= 1
+            
+            # Находим вызов с URL Moderation
+            moderation_calls = [
+                call for call in mock_post.call_args_list
+                if call[0][0] == "http://moderation:8000/api/v1/b2b/events"
+            ]
+            
+            assert len(moderation_calls) == 1, "Should have exactly one call to Moderation"
+            
+            call_args = moderation_calls[0]
+            request_body = call_args[1]["json"]
+            assert request_body["event_type"] == "PRODUCT_DELETED"
+            assert "idempotency_key" in request_body
+            assert "occurred_at" in request_body
+            
+            payload = request_body["payload"]
+            assert payload["product_id"] == str(test_product_created.id)
