@@ -18,7 +18,8 @@ class SKUBase(BaseModel):
     price: int = Field(..., ge=0, description="Цена в копейках")
     cost_price: Optional[int] = Field(None, ge=0, description="Себестоимость в копейках")
     discount: int = Field(0, ge=0, description="Скидка в копейках")
-    images: List[SKUImageCreate] = Field(default_factory=list, description="Изображения SKU")  # ← ИЗМЕНЕНО
+    images: List[SKUImageCreate] = Field(default_factory=list, description="Изображения SKU")
+    article: Optional[str] = Field(None, max_length=100) 
     characteristics: List[CharacteristicValue] = Field(default_factory=list)
 
 

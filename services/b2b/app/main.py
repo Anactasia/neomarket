@@ -51,6 +51,13 @@ async def http_exception_handler(request, exc: StarletteHTTPException):
     """
     # Проверяем, есть ли уже detail в формате {"code", "message"}
     if hasattr(exc, 'detail') and isinstance(exc.detail, dict):
+        # Для 409 CONFLICT оставляем оригинальный формат (reserved, failed_items)
+        if exc.status_code == 409 and "reserved" in exc.detail:
+            return JSONResponse(
+                status_code=exc.status_code,
+                content=exc.detail
+            )
+        # Если есть code и message - оставляем как есть
         if "code" in exc.detail and "message" in exc.detail:
             return JSONResponse(
                 status_code=exc.status_code,

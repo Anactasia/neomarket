@@ -4,39 +4,50 @@ from typing import Optional, List
 from datetime import datetime
 from uuid import UUID
 
-class InvoiceItemBase(BaseModel):
-    sku_id: UUID
-    quantity: int = Field(...)
-    price: Optional[int] = None
+class InvoiceItemCreate(BaseModel):
+    """Позиция накладной при создании"""
+    sku_id: UUID = Field(..., description="ID SKU")
+    quantity: int = Field(..., gt=0, description="Заявленное количество (> 0)")
 
-class InvoiceItemCreate(InvoiceItemBase):
-    pass
-
-class InvoiceItem(InvoiceItemBase):
+class InvoiceItemResponse(BaseModel):
+    """Позиция накладной в ответе"""
     id: UUID
-    invoice_id: UUID
+    sku_id: UUID
+    quantity: int
     accepted_quantity: Optional[int] = None
-    created_at: datetime
-
+    
     class Config:
         from_attributes = True
 
-class InvoiceBase(BaseModel):
-    invoice_number: str = Field(..., max_length=50)
-    warehouse_id: Optional[int] = None
+class InvoiceCreate(BaseModel):
+    """Создание накладной"""
+    items: List[InvoiceItemCreate] = Field(..., min_length=1, description="Минимум одна позиция")
 
-class InvoiceCreate(InvoiceBase):
-    seller_id: UUID
-    items: List[InvoiceItemCreate]
-
-class Invoice(InvoiceBase):
+class InvoiceResponse(BaseModel):
+    """Ответ с накладной"""
     id: UUID
     seller_id: UUID
     status: str
-    received_at: Optional[datetime] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
-    items: List[InvoiceItem] = []
-
+    accepted_at: Optional[datetime] = None
+    items: List[InvoiceItemResponse] = []
+    
     class Config:
         from_attributes = True
+
+class InvoiceAcceptItem(BaseModel):
+    """Позиция при приёмке"""
+    invoice_item_id: UUID
+    accepted_quantity: int = Field(..., ge=0, description="Принятое количество (>= 0)")
+
+class InvoiceAcceptRequest(BaseModel):
+    """Запрос на приёмку накладной"""
+    accepted_items: Optional[List[InvoiceAcceptItem]] = Field(None, description="Результат приёмки для каждой позиции")
+
+class InvoicePaginatedResponse(BaseModel):
+    """Пагинированный ответ со списком накладных"""
+    items: List[InvoiceResponse]
+    total_count: int
+    limit: int
+    offset: int

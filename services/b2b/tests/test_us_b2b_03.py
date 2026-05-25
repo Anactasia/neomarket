@@ -326,7 +326,7 @@ class TestB2B03EditProduct:
 
         assert response.status_code == 403
         error_data = response.json()
-        assert error_data["code"] == "FORBIDDEN"  # ← NOT_FOUND → FORBIDDEN
+        assert error_data["code"] == "NOT_OWNER"  #FORBIDDEN на NOT_OWNER
         assert "does not belong" in error_data["message"].lower()
 
     def test_edit_created_product_no_status_change(

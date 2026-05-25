@@ -10,6 +10,7 @@ from unittest.mock import patch, MagicMock
 from app.main import app
 from app.database import get_db
 from app.models.category import Category
+from app.models.sku import SKU
 from app.models.seller import Seller
 from app.models.product import Product
 from app.core.security import get_password_hash, create_access_token
@@ -18,9 +19,14 @@ from app.schemas.product import ProductStatus
 
 # Фикстуры для тестов
 @pytest.fixture
-def client():
-    """Тестовый клиент"""
-    return TestClient(app)
+def client(db_session):
+    """Тестовый клиент с переопределённой БД"""
+    def override_get_db():
+        yield db_session
+    
+    app.dependency_overrides[get_db] = override_get_db
+    yield TestClient(app)
+    app.dependency_overrides.clear()
 
 
 @pytest.fixture
@@ -160,6 +166,44 @@ def test_other_seller_product(db_session, test_category, test_seller):
     db_session.refresh(product)
     return {"product": product, "other_seller": other_seller}
 
+
+@pytest.fixture
+def test_product_moderated(db_session, test_category, test_seller):
+    """Создаём тестовый товар со статусом MODERATED и одним SKU"""
+    product = Product(
+        id=uuid4(),
+        seller_id=test_seller.id,
+        category_id=test_category.id,
+        title="Moderated Product",
+        slug="moderated-product",
+        description="Description",
+        status=ProductStatus.MODERATED.value,
+        deleted=False,
+        blocked=False,
+        moderation_comment=None,
+        blocking_reason_id=None
+    )
+    db_session.add(product)
+    db_session.flush()
+    
+    sku = SKU(
+        id=uuid4(),
+        product_id=product.id,
+        name="Existing SKU",
+        price=1000000,
+        cost_price=700000,
+        discount=0,
+        image="/s3/test.jpg",
+        stock_quantity=0,
+        active_quantity=0,
+        reserved_quantity=0,
+        article=None
+    )
+    db_session.add(sku)
+    db_session.commit()
+    db_session.refresh(product)
+    db_session.refresh(sku)
+    return {"product": product, "sku": sku}
 
 class TestB2B02CreateSKU:
     """Тесты для US-B2B-02: Создание SKU"""
@@ -351,7 +395,7 @@ class TestB2B02CreateSKU:
 
         assert response.status_code == 403
         error_data = response.json()
-        assert error_data["code"] == "FORBIDDEN"
+        assert error_data["code"] == "NOT_OWNER"  # ← FORBIDDEN → NOT_OWNER
         assert "does not belong" in error_data["message"].lower()
     
     def test_first_sku_sends_created_event_to_moderation(
@@ -399,3 +443,34 @@ class TestB2B02CreateSKU:
             assert payload["product_id"] == str(test_product_created.id)
             assert payload["seller_id"] == str(test_product_created.seller_id)
             assert "json_after" in payload
+    
+
+    def test_adding_sku_to_moderated_re_moderates_product(
+        self, client, db_session, auth_headers, test_product_moderated
+    ):
+        """Добавление SKU к MODERATED товару → товар в ON_MODERATION + событие EDITED"""
+        # Проверяем, что товар изначально в MODERATED
+        product_response = client.get(
+            f"/api/v1/products/{test_product_moderated['product'].id}",
+            headers=auth_headers
+        )
+        assert product_response.json()["status"] == "MODERATED"
+        
+        # Добавляем второй SKU
+        response = client.post("/api/v1/skus/", json={
+            "product_id": str(test_product_moderated["product"].id),
+            "name": "Second SKU",
+            "price": 12999000,
+            "cost_price": 9500000,
+            "discount": 0,
+            "images": [{"url": "/s3/test.jpg", "ordering": 0}]
+        }, headers=auth_headers)
+
+        assert response.status_code == 201
+        
+        # Проверяем, что товар перешёл в ON_MODERATION
+        product_response = client.get(
+            f"/api/v1/products/{test_product_moderated['product'].id}",
+            headers=auth_headers
+        )
+        assert product_response.json()["status"] == "ON_MODERATION"

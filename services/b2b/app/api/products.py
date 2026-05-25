@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Header
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from typing import List, Optional
 from uuid import UUID
 import json
@@ -10,6 +11,7 @@ from app.database import get_db
 from app.models.category import Category
 from app.models.product import Product, ProductImage
 from app.models.sku import SKU
+from app.schemas.sku import SKU as SKUResponse
 from app.models.seller import Seller
 from app.schemas.product import (
     ProductCreate,
@@ -20,7 +22,12 @@ from app.schemas.product import (
     ImageResponse,
     Product as ProductSchema,
     BlockingReason,
-    FieldReport
+    FieldReport,
+    ProductPublicShortResponse,
+    ProductPublicResponse,
+    ProductPublicPaginatedResponse,
+    SKUPublicResponse,
+    BatchProductIdsRequest
 )
 from app.schemas.common import CategoryRef, SKUInProduct, CharacteristicValueResponse, ProductImageResponse
 from app.dependencies.auth import get_current_seller, get_current_seller_optional  # ← реальная JWT аутентификация
@@ -63,17 +70,23 @@ def product_to_full_response(product: Product, db: Session) -> ProductResponse:
     # Формируем SKU с полными данными
     skus = []
     for sku in product.skus:
-        skus.append(SKUInProduct(
+        skus.append(SKUResponse(
             id=sku.id,
+            product_id=sku.product_id,
             name=sku.name,
             price=sku.price,
-            cost_price=sku.cost_price or 0,
+            cost_price=sku.cost_price,
             discount=sku.discount or 0,
-            image=sku.image or "",
+            stock_quantity=sku.stock_quantity,
             active_quantity=sku.active_quantity,
             reserved_quantity=sku.reserved_quantity,
-            characteristics=[]
+            article=sku.article,
+            images=[],  # 
+            characteristics=[],  # 
+            created_at=sku.created_at,
+            updated_at=sku.updated_at
         ))
+
     
     return ProductResponse(
         id=product.id,
@@ -108,24 +121,45 @@ def product_to_full_response(product: Product, db: Session) -> ProductResponse:
     )
 
 
-def product_to_public_response(product: Product, db: Session) -> ProductResponse:
-    """Преобразует Product в публичный ProductResponse (без cost_price, reserved_quantity)"""
+def product_to_public_response(product: Product, db: Session) -> ProductPublicResponse:
+    """Преобразует Product в публичный ProductPublicResponse"""
+    
+    # Формируем blocking_reason и field_reports (как у тебя уже есть)
+    blocking_reason = None
+    if product.blocked and product.blocking_reason_id:
+        blocking_reason = BlockingReason(
+            id=product.blocking_reason_id,
+            title="Товар заблокирован модерацией",
+            comment=product.moderation_comment
+        )
+    
+    field_reports = []
+    if hasattr(product, 'field_reports_json') and product.field_reports_json:
+        for fr in product.field_reports_json:
+            field_reports.append(FieldReport(
+                field_name=fr.get("field_name", ""),
+                sku_id=UUID(fr["sku_id"]) if fr.get("sku_id") else None,
+                comment=fr.get("comment", "")
+            ))
+
     # Формируем SKU без чувствительных полей
     skus = []
     for sku in product.skus:
-        skus.append(SKUInProduct(
+        # Фильтруем только SKU с остатком? Нет, показываем все
+        skus.append(SKUPublicResponse(
             id=sku.id,
+            product_id=sku.product_id,           # ← добавить!
             name=sku.name,
             price=sku.price,
-            cost_price=None,  # не показываем
             discount=sku.discount or 0,
-            image=sku.image or "",
+            stock_quantity=sku.stock_quantity,   # ← добавить!
             active_quantity=sku.active_quantity,
-            reserved_quantity=None,  # не показываем
-            characteristics=[]
+            article=sku.article,
+            images=[],  # TODO: добавить реальные изображения SKU
+            characteristics=[]  # TODO: добавить реальные характеристики SKU
         ))
     
-    return ProductResponse(
+    return ProductPublicResponse(
         id=product.id,
         seller_id=product.seller_id,
         category_id=product.category_id,
@@ -133,11 +167,6 @@ def product_to_public_response(product: Product, db: Session) -> ProductResponse
         slug=product.slug or "",
         description=product.description or "",
         status=ProductStatus(product.status),
-        deleted=product.deleted,
-        blocked=product.blocked,
-        blocking_reason=None,  # в публичном режиме не показываем
-        field_reports=[],  # в публичном режиме не показываем
-        moderator_comment=product.moderation_comment,
         images=[
             ProductImageResponse(
                 id=img.id,
@@ -158,7 +187,7 @@ def product_to_public_response(product: Product, db: Session) -> ProductResponse
     )
 
 def send_event_to_moderation_sync(
-    product_id: UUID, 
+    product_id: UUID,
     seller_id: UUID,
     idempotency_key: str,
     moderation_url: str = "http://moderation:8000",
@@ -238,7 +267,7 @@ def send_event_to_b2c_sync(
     
     event_type: "PRODUCT_DELETED", "PRODUCT_BLOCKED", "PRODUCT_HARD_BLOCKED", ...
     payload:
-      - PRODUCT_DELETED: {product_id}
+      - PRODUCT_DELETED: {product_id, sku_ids}
     """
     import httpx
     from datetime import datetime, timezone
@@ -246,9 +275,10 @@ def send_event_to_b2c_sync(
     
     logger = logging.getLogger(__name__)
     
-    # Payload соответствует EventProductRef для PRODUCT_DELETED
+    # Payload для PRODUCT_DELETED включает sku_ids согласно канону
     payload = {
-        "product_id": str(product_id)
+        "product_id": str(product_id),
+        "sku_ids": [str(sku_id) for sku_id in sku_ids]
     }
     
     event_payload = {
@@ -394,7 +424,7 @@ def get_product(
     product_id: UUID,
     x_service_key: Optional[str] = Header(None, alias="X-Service-Key"),
     db: Session = Depends(get_db),
-    current_seller: Optional[Seller] = Depends(get_current_seller_optional)  # новый dependency
+    current_seller: Optional[Seller] = Depends(get_current_seller_optional)
 ):
     """
     Получить карточку товара.
@@ -407,16 +437,17 @@ def get_product(
     """
     is_service_call = x_service_key is not None and verify_service_key(x_service_key)
     
-    # Определяем, какой режим используем
     if is_service_call:
         # Сервисный режим — без проверки seller_id
-        product = db.query(Product).filter(Product.id == product_id).first()
+        product = db.query(Product).filter(
+            Product.id == product_id,
+            Product.deleted == False
+        ).first()
         if not product:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"code": "NOT_FOUND", "message": "Product not found"}
             )
-        # Возвращаем публичные данные
         return product_to_public_response(product, db)
     else:
         # Seller режим — проверяем seller_id из JWT
@@ -428,7 +459,8 @@ def get_product(
         
         product = db.query(Product).filter(
             Product.id == product_id,
-            Product.seller_id == current_seller.id
+            Product.seller_id == current_seller.id,
+            Product.deleted == False
         ).first()
         
         if not product:
@@ -437,9 +469,8 @@ def get_product(
                 detail={"code": "NOT_FOUND", "message": "Product not found"}
             )
         
-        # Возвращаем полные данные
         return product_to_full_response(product, db)
-    
+        
 
 @router.patch("/{product_id}", response_model=ProductResponse, status_code=status.HTTP_200_OK)
 def update_product(
@@ -449,7 +480,7 @@ def update_product(
     db: Session = Depends(get_db),
     current_seller: Seller = Depends(get_current_seller)
 ):
-    # 1. Проверяем, существует ли товар вообще
+    # 1. Проверяем существование товара
     product = db.query(Product).filter(Product.id == product_id).first()
     
     if not product:
@@ -458,56 +489,81 @@ def update_product(
             detail={"code": "NOT_FOUND", "message": "Product not found"}
         )
     
-    # 2. Проверяем ownership (чужой товар → 403)
+    # 2. Ownership check (IDOR protection)
     if product.seller_id != current_seller.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail={"code": "FORBIDDEN", "message": "Product does not belong to you"}
+            detail={"code": "NOT_OWNER", "message": "Product does not belong to the authenticated seller"}
         )
     
-    # 3. Проверяем HARD_BLOCKED
+    # 3. Проверка HARD_BLOCKED
     if product.status == ProductStatus.HARD_BLOCKED.value:
-        error_response("FORBIDDEN", "Cannot edit hard-blocked product", 403)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "FORBIDDEN", "message": "Cannot edit hard-blocked product"}
+        )
     
-    # 3. Обновляем поля
+    # 4. Сохраняем старые данные для события
+    old_status = product.status
+    
+    # 5. Обновляем поля
     update_data = product_update.model_dump(exclude_unset=True)
     if update_data:
         for field, value in update_data.items():
             if field == 'characteristics' and value is not None:
                 product.characteristics_json = [char.model_dump() for char in value]
+            elif field == 'images' and value is not None:
+                # Обработка изображений - удаляем старые и добавляем новые
+                db.query(ProductImage).filter(ProductImage.product_id == product.id).delete()
+                for img in value:
+                    db_image = ProductImage(
+                        product_id=product.id,
+                        url=img.url,
+                        sort_order=img.ordering
+                    )
+                    db.add(db_image)
             elif value is not None:
                 setattr(product, field, value)
     
-    # 4. Проверяем, нужно ли менять статус товара
-    # Статус меняется, если товар был в MODERATED или BLOCKED
-    needs_status_change = product.status in [ProductStatus.MODERATED.value, ProductStatus.BLOCKED.value]
-    
-    # 5. Если товар в MODERATED или BLOCKED → меняем статус на ON_MODERATION
-    if needs_status_change:
+    # 6. Логика изменения статуса (согласно канону)
+    # Если товар в MODERATED или BLOCKED → переводим в ON_MODERATION
+    if product.status in [ProductStatus.MODERATED.value, ProductStatus.BLOCKED.value]:
         product.status = ProductStatus.ON_MODERATION.value
     
     db.commit()
     db.refresh(product)
+    product.skus
     
-    # 6. Отправляем событие EDITED в Moderation (background task)
-    # Событие отправляется всегда, если товар уже был на модерации (статус != CREATED)
-    # или если он в BLOCKED (что означает, что был на модерации ранее)
-    if product.status != ProductStatus.CREATED.value or product.blocked:
-        import uuid as uuid_module
+    # 7. Отправляем событие EDITED в Moderation (если нужно)
+    # Отправляем всегда, кроме случая, когда товар только создан и не блокирован
+    should_send_event = (
+        product.status != ProductStatus.CREATED.value or 
+        product.blocked or
+        old_status in [ProductStatus.MODERATED.value, ProductStatus.BLOCKED.value]
+    )
+    
+    if should_send_event:
         idempotency_key = uuid_module.uuid4()
-        # Формируем json_before и json_after
+        
+        # Формируем снапшоты для Moderation Service
         json_before = {
             "product_id": str(product.id),
             "seller_id": str(product.seller_id),
             "title": product.title,
-            "status": ProductStatus.MODERATED.value if needs_status_change else product.status
+            "status": old_status,
+            "description": product.description,
+            "category_id": str(product.category_id) if product.category_id else None
         }
+        
         json_after = {
             "product_id": str(product.id),
             "seller_id": str(product.seller_id),
             "title": product.title,
-            "status": ProductStatus.ON_MODERATION.value if needs_status_change else product.status
+            "status": product.status,
+            "description": product.description,
+            "category_id": str(product.category_id) if product.category_id else None
         }
+        
         background_tasks.add_task(
             send_event_to_moderation_sync,
             product_id=product.id,
@@ -519,49 +575,8 @@ def update_product(
             category_id=product.category_id
         )
     
-    # Формируем ответ с реальными данными из БД
-    # Загружаем SKUs из БД
-    skus = [
-        SKUInProduct(
-            id=sku.id,
-            name=sku.name,
-            price=sku.price,
-            discount=sku.discount,
-            image=sku.image,
-            active_quantity=sku.active_quantity,
-            characteristics=[]
-        ) for sku in product.skus
-    ]
-    
-    return ProductResponse(
-        id=product.id,
-        seller_id=product.seller_id,
-        category_id=product.category_id,
-        title=product.title,
-        slug=product.slug or "",
-        description=product.description,
-        status=ProductStatus(product.status),
-        deleted=product.deleted,
-        blocking_reason_id=product.blocking_reason_id,
-        moderator_comment=product.moderation_comment,
-        images=[
-            ProductImageResponse(
-                id=img.id,
-                url=img.url,
-                ordering=img.sort_order
-            ) for img in product.images
-        ],
-        characteristics=[
-            CharacteristicValueResponse(
-                id=uuid.uuid4(),
-                name=char["name"],
-                value=char["value"]
-            ) for char in (product.characteristics_json or [])
-        ],
-        skus=skus,
-        created_at=product.created_at,
-        updated_at=product.updated_at
-    )
+    # 8. ВАЖНО: возвращаем обновленный товар
+    return product_to_full_response(product, db)
     
 
 @router.delete("/{product_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -571,6 +586,16 @@ def delete_product(
     db: Session = Depends(get_db),
     current_seller: Seller = Depends(get_current_seller)
 ):
+    """
+    Удалить товар (мягкое удаление).
+    
+    Соответствует US-B2B-04:
+    - Мягкое удаление: deleted = True
+    - Проверка ownership (IDOR защита)
+    - Проверка HARD_BLOCKED → 403
+    - Повторное удаление → 400
+    - Отправка двух событий: DELETED в Moderation, PRODUCT_DELETED в B2C
+    """
     # 1. Проверяем, существует ли товар вообще
     product = db.query(Product).filter(Product.id == product_id).first()
     
@@ -580,28 +605,37 @@ def delete_product(
             detail={"code": "NOT_FOUND", "message": "Product not found"}
         )
     
-    # 2. Проверяем ownership (чужой товар → 403)
+    # 2. Проверяем ownership (чужой товар → 403 NOT_OWNER)
     if product.seller_id != current_seller.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail={"code": "FORBIDDEN", "message": "Product does not belong to you"}
+            detail={"code": "NOT_OWNER", "message": "Product does not belong to the authenticated seller"}
         )
     
-    # 3. Если товар уже удалён — возвращаем 204 (идемпотентность)
-    if product.deleted:
-        return None
+    # 3. Проверяем HARD_BLOCKED (нельзя удалить HARD_BLOCKED товар)
+    if product.status == ProductStatus.HARD_BLOCKED.value:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "FORBIDDEN", "message": "Cannot delete hard-blocked product"}
+        )
     
-    # 4. Получаем sku_ids для события в B2C
+    # 4. Если товар уже удалён — возвращаем 400
+    if product.deleted:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"code": "INVALID_REQUEST", "message": "Product already deleted"}
+        )
+    
+    # 5. Получаем sku_ids для события в B2C
     skus = db.query(SKU).filter(SKU.product_id == product_id).all()
     sku_ids = [sku.id for sku in skus]
     
-    # 5. Мягкое удаление
+    # 6. Мягкое удаление
     product.deleted = True
     db.commit()
     db.refresh(product)
     
-    # 6. Отправляем событие DELETED в Moderation
-    import uuid as uuid_module
+    # 7. Отправляем событие DELETED в Moderation (background task)
     moderation_idempotency_key = uuid_module.uuid4()
     background_tasks.add_task(
         send_event_to_moderation_sync,
@@ -614,7 +648,7 @@ def delete_product(
         category_id=product.category_id
     )
     
-    # 7. Отправляем событие PRODUCT_DELETED в B2C
+    # 8. Отправляем событие PRODUCT_DELETED в B2C (background task)
     b2c_idempotency_key = uuid_module.uuid4()
     background_tasks.add_task(
         send_event_to_b2c_sync,
@@ -625,3 +659,248 @@ def delete_product(
     )
     
     return None
+
+
+# ───────────────────── PUBLIC CATALOG (для B2C) ─────────────────────
+
+@router.get("/public/products", response_model=ProductPublicPaginatedResponse)
+def get_public_products(
+    limit: int = 20,
+    offset: int = 0,
+    category_id: Optional[UUID] = None,
+    search: Optional[str] = None,
+    min_price: Optional[int] = None,
+    max_price: Optional[int] = None,
+    seller_id: Optional[UUID] = None,
+    sort: str = "created_desc",
+    x_service_key: Optional[str] = Header(None, alias="X-Service-Key"),
+    db: Session = Depends(get_db)
+):
+    """
+    Публичный каталог товаров для B2C (витрина).
+    
+    Авторизация: X-Service-Key (межсервисный вызов)
+    Условия видимости:
+    - status = MODERATED
+    - deleted = false
+    - хотя бы один SKU имеет active_quantity > 0
+    """
+    # Проверка X-Service-Key
+    if x_service_key is None or not verify_service_key(x_service_key):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "UNAUTHORIZED", "message": "X-Service-Key is required"}
+        )
+    
+    # Валидация sort
+    valid_sorts = ["price_asc", "price_desc", "created_desc", "popular"]
+    if sort not in valid_sorts:
+        sort = "created_desc"
+    
+    # Фильтр по наличию SKU с остатком через any()
+    query = db.query(Product).filter(
+        Product.status == ProductStatus.MODERATED.value,
+        Product.deleted == False,
+        Product.skus.any(SKU.active_quantity > 0)
+    )
+    
+    # Фильтр по категории
+    if category_id:
+        query = query.filter(Product.category_id == category_id)
+    
+    # Фильтр по продавцу
+    if seller_id:
+        query = query.filter(Product.seller_id == seller_id)
+    
+    # Текстовый поиск
+    if search:
+        query = query.filter(
+            (Product.title.ilike(f"%{search}%")) | 
+            (Product.description.ilike(f"%{search}%"))
+        )
+    
+    # Фильтры по цене (через any() для SKU)
+    if min_price is not None:
+        query = query.filter(Product.skus.any(SKU.price >= min_price))
+    
+    if max_price is not None:
+        query = query.filter(Product.skus.any(SKU.price <= max_price))
+    
+    # Считаем общее количество
+    total_count = query.count()
+    
+    # Сортировка
+    if sort == "price_asc":
+        # Сортировка по минимальной цене SKU через субзапрос
+        min_price_subq = db.query(
+            SKU.product_id,
+            func.min(SKU.price).label("min_price")
+        ).filter(
+            SKU.product_id == Product.id,
+            SKU.active_quantity > 0
+        ).correlate(Product).as_scalar()
+        query = query.order_by(min_price_subq.asc())
+    elif sort == "price_desc":
+        min_price_subq = db.query(
+            SKU.product_id,
+            func.min(SKU.price).label("min_price")
+        ).filter(
+            SKU.product_id == Product.id,
+            SKU.active_quantity > 0
+        ).correlate(Product).as_scalar()
+        query = query.order_by(min_price_subq.desc())
+    elif sort == "created_desc":
+        query = query.order_by(Product.created_at.desc())
+    elif sort == "popular":
+        # Популярность = количество продаж (реализуем как случайную сортировку для MVP)
+        # В продакшене: order_by(func.random() или сортировка по количеству заказов)
+        query = query.order_by(func.random())
+    
+    # Пагинация
+    products = query.offset(offset).limit(limit).all()
+    
+    # Формируем ответ
+    result_items = []
+    for product in products:
+        # Получаем минимальную цену среди SKU с остатком
+        skus_with_stock = [sku for sku in product.skus if sku.active_quantity > 0]
+        min_price_val = min([sku.price for sku in skus_with_stock], default=None)
+        
+        # Находим главное изображение
+        cover_image = None
+        if product.images:
+            cover_image = product.images[0].url if product.images else None
+        
+        result_items.append(ProductPublicShortResponse(
+            id=product.id,
+            title=product.title,
+            slug=product.slug or "",
+            status=ProductStatus(product.status),
+            category_id=product.category_id,
+            created_at=product.created_at,
+            min_price=min_price_val,
+            cover_image=cover_image
+        ))
+    
+    return ProductPublicPaginatedResponse(
+        items=result_items,
+        total_count=total_count,
+        limit=limit,
+        offset=offset
+    )
+
+
+@router.post("/public/products/batch", response_model=List[ProductPublicResponse])
+def get_public_products_batch(
+    request: BatchProductIdsRequest,
+    x_service_key: Optional[str] = Header(None, alias="X-Service-Key"),
+    db: Session = Depends(get_db)
+):
+    """
+    Batch-запрос публичных карточек товаров по списку ID.
+    
+    Используется B2C для отображения подборок и избранного.
+    Возвращает только видимые товары (без 404 для скрытых).
+    
+    Авторизация: X-Service-Key
+    """
+    # Проверка X-Service-Key
+    if x_service_key is None or not verify_service_key(x_service_key):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "UNAUTHORIZED", "message": "X-Service-Key is required"}
+        )
+    
+    # Получаем товары по ID с фильтрацией видимости
+    products = db.query(Product).filter(
+        Product.id.in_(request.product_ids),
+        Product.status == ProductStatus.MODERATED.value,
+        Product.deleted == False
+    ).all()
+    
+    # Формируем ответ с полными данными
+    result = []
+    for product in products:
+        result.append(product_to_public_response(product, db))
+    
+    return result
+
+
+@router.get("/public/products/{product_id}", response_model=ProductPublicResponse)
+def get_public_product(
+    product_id: UUID,
+    x_service_key: Optional[str] = Header(None, alias="X-Service-Key"),
+    db: Session = Depends(get_db)
+):
+    """
+    Публичная карточка товара для витрины.
+    
+    Авторизация: X-Service-Key
+    """
+    # Проверка X-Service-Key
+    if x_service_key is None or not verify_service_key(x_service_key):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "UNAUTHORIZED", "message": "X-Service-Key is required"}
+        )
+    
+    # Получаем товар
+    product = db.query(Product).filter(
+        Product.id == product_id,
+        Product.status == ProductStatus.MODERATED.value,
+        Product.deleted == False
+    ).first()
+    
+    if not product:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "NOT_FOUND", "message": "Product not found"}
+        )
+    
+    return product_to_public_response(product, db)
+
+
+@router.get("/public/skus/{sku_id}", response_model=SKUPublicResponse)
+def get_public_sku(
+    sku_id: UUID,
+    x_service_key: Optional[str] = Header(None, alias="X-Service-Key"),
+    db: Session = Depends(get_db)
+):
+    """
+    Публичный SKU для витрины (без cost_price, reserved_quantity).
+    
+    Авторизация: X-Service-Key
+    """
+    # Проверка X-Service-Key
+    if x_service_key is None or not verify_service_key(x_service_key):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail={"code": "UNAUTHORIZED", "message": "X-Service-Key is required"}
+        )
+    
+    # Получаем SKU с проверкой видимости товара
+    sku = db.query(SKU).join(Product).filter(
+        SKU.id == sku_id,
+        Product.status == ProductStatus.MODERATED.value,
+        Product.deleted == False
+    ).first()
+    
+    if not sku:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "NOT_FOUND", "message": "SKU not found"}
+        )
+    
+    # Формируем ответ без чувствительных полей
+    return SKUPublicResponse(
+        id=sku.id,
+        product_id=sku.product_id,
+        name=sku.name,
+        price=sku.price,
+        discount=sku.discount,
+        stock_quantity=sku.stock_quantity,
+        active_quantity=sku.active_quantity,
+        article=sku.article,
+        images=[],
+        characteristics=[]
+    )

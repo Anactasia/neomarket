@@ -108,26 +108,22 @@ def create_sku(
 ):
     """
     Создать новый SKU (вариант товара).
-    
-    Побочные эффекты:
-    - Если это первый SKU для товара со статусом CREATED → товар переходит в ON_MODERATION
-    - Отправляется событие CREATED в Moderation Service (через background task)
     """
     # 1. Проверяем существование товара
     product = db.query(Product).filter(Product.id == sku.product_id).first()
     if not product:
         error_response("NOT_FOUND", "Product not found", 404)
     
-    # 2. Проверяем, что товар не в статусе HARD_BLOCKED
-    if product.status == ProductStatus.HARD_BLOCKED.value:
-        error_response("FORBIDDEN", "Cannot add SKU to hard-blocked product", 403)
-    
-    # 3. Проверяем, что товар принадлежит текущему продавцу
+    # 2. Проверяем, что товар принадлежит текущему продавцу (IDOR защита)
     if product.seller_id != current_seller.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail={"code": "FORBIDDEN", "message": "Product does not belong to you"}
+            detail={"code": "NOT_OWNER", "message": "Product does not belong to the authenticated seller"}
         )
+    
+    # 3. Проверяем, что товар не в статусе HARD_BLOCKED
+    if product.status == ProductStatus.HARD_BLOCKED.value:
+        error_response("FORBIDDEN", "Cannot add SKU to hard-blocked product", 403)
     
     # 4. Проверяем наличие images в запросе (минимум одно)
     if not sku.images or len(sku.images) == 0:
@@ -141,7 +137,7 @@ def create_sku(
         price=sku.price,
         cost_price=sku.cost_price,
         discount=sku.discount,
-        image=first_image.url,  # ← берём url из SKUImageCreate
+        image=first_image.url,
         stock_quantity=0,
         active_quantity=0,
         reserved_quantity=0,
@@ -158,12 +154,13 @@ def create_sku(
         )
         db.add(db_char)
     
-    # 7. Проверяем, первый ли это SKU для товара
+    # 7. Проверяем, первый ли это SKU для товара и нужно ли re-moderation
     sku_count = db.query(SKU).filter(SKU.product_id == sku.product_id).count()
     is_first_sku = sku_count == 1 and product.status == ProductStatus.CREATED.value
+    needs_re_moderation = product.status in [ProductStatus.MODERATED.value, ProductStatus.BLOCKED.value]
     
-    # 8. Если первый SKU и товар в CREATED → меняем статус на ON_MODERATION
-    if is_first_sku:
+    # 8. Меняем статус товара при необходимости
+    if is_first_sku or needs_re_moderation:
         product.status = ProductStatus.ON_MODERATION.value
         db.flush()
     
@@ -173,7 +170,6 @@ def create_sku(
     # 9. Отправляем событие в Moderation (background task)
     if is_first_sku:
         idempotency_key = uuid_module.uuid4()
-        # Формируем json_after с данными товара
         json_after = {
             "product_id": str(sku.product_id),
             "seller_id": str(product.seller_id),
@@ -189,8 +185,32 @@ def create_sku(
             json_after=json_after,
             category_id=product.category_id
         )
+    elif needs_re_moderation:
+        idempotency_key = uuid_module.uuid4()
+        json_before = {
+            "product_id": str(product.id),
+            "seller_id": str(product.seller_id),
+            "title": product.title,
+            "status": ProductStatus.MODERATED.value if product.status == ProductStatus.MODERATED.value else ProductStatus.BLOCKED.value
+        }
+        json_after = {
+            "product_id": str(product.id),
+            "seller_id": str(product.seller_id),
+            "title": product.title,
+            "status": ProductStatus.ON_MODERATION.value
+        }
+        background_tasks.add_task(
+            send_event_to_moderation_sync,
+            product_id=sku.product_id,
+            seller_id=product.seller_id,
+            idempotency_key=idempotency_key,
+            event_type="PRODUCT_EDITED",
+            json_before=json_before,
+            json_after=json_after,
+            category_id=product.category_id
+        )
     
-    # 10. Формируем ответ
+    # 10. Формируем ответ (без изменений)
     return SKUSchema(
         id=db_sku.id,
         product_id=db_sku.product_id,
@@ -204,10 +224,10 @@ def create_sku(
         article=db_sku.article,
         images=[
             SKUImageResponse(
-                id=uuid_module.uuid4(),  # ← генерируем ID для изображения
+                id=uuid_module.uuid4(),
                 url=img.url,
                 ordering=img.ordering or 0
-            ) for img in sku.images  # ← теперь перебираем все изображения
+            ) for img in sku.images
         ],
         characteristics=[
             SKUCharacteristicResponse(
@@ -234,7 +254,7 @@ def update_sku(
     
     Побочные эффекты:
     - Если товар в статусе MODERATED или BLOCKED → товар переходит в ON_MODERATION
-    - Отправляется событие EDITED в Moderation Service (всегда при редактировании)
+    - Отправляется событие EDITED в Moderation Service
     - reserved_quantity сохраняется (не сбрасывается)
     """
     # 1. Проверяем существование SKU
@@ -253,12 +273,16 @@ def update_sku(
     
     # 4. Проверяем, что товар принадлежит текущему продавцу (IDOR защита)
     if product.seller_id != current_seller.id:
-        error_response("NOT_OWNER", "Product does not belong to the authenticated seller", 403)
+        # ИСПРАВЛЕНО: NOT_OWNER → FORBIDDEN
+        error_response("NOT_OWNER", "SKU does not belong to the authenticated seller", 403)
     
-    # 5. Сохраняем reserved_quantity перед обновлением
+    # 5. Сохраняем старые данные для события
+    old_product_status = product.status
+    
+    # 6. Сохраняем reserved_quantity перед обновлением
     old_reserved_quantity = db_sku.reserved_quantity
     
-    # 6. Обновляем поля SKU
+    # 7. Обновляем поля SKU
     for field, value in sku_update.model_dump(exclude_unset=True).items():
         if field == 'characteristics' and value is not None:
             # Обновляем характеристики
@@ -276,38 +300,41 @@ def update_sku(
         elif value is not None:
             setattr(db_sku, field, value)
     
-    # 7. Восстанавливаем reserved_quantity (сохраняем активные резервы)
+    # 8. Восстанавливаем reserved_quantity (сохраняем активные резервы)
     db_sku.reserved_quantity = old_reserved_quantity
     
-    # 8. Проверяем, нужно ли менять статус товара
+    # 9. ИСПРАВЛЕНО: проверяем, нужно ли менять статус товара
     # Статус меняется, если товар был в MODERATED или BLOCKED
     needs_status_change = product.status in [ProductStatus.MODERATED.value, ProductStatus.BLOCKED.value]
     
-    # 9. Если товар в MODERATED или BLOCKED → меняем статус на ON_MODERATION
+    # 10. Если товар в MODERATED или BLOCKED → меняем статус на ON_MODERATION
     if needs_status_change:
         product.status = ProductStatus.ON_MODERATION.value
     
     db.commit()
     db.refresh(db_sku)
+    db.refresh(product)
     
-    # 10. Отправляем событие EDITED в Moderation (background task)
-    # Событие отправляется всегда, если товар уже был на модерации (статус != CREATED)
-    # или если он в BLOCKED (что означает, что был на модерации ранее)
-    if product.status != ProductStatus.CREATED.value or product.blocked:
+    # 11. ИСПРАВЛЕНО: отправляем событие EDITED в Moderation
+    # Событие отправляется, если статус изменился или товар уже был на модерации
+    if needs_status_change or old_product_status != ProductStatus.CREATED.value:
         idempotency_key = uuid_module.uuid4()
-        # Формируем json_before и json_after
+        
+        # ИСПРАВЛЕНО: правильно формируем json_before
         json_before = {
             "product_id": str(product.id),
             "seller_id": str(product.seller_id),
             "title": product.title,
-            "status": ProductStatus.MODERATED.value if needs_status_change else product.status
+            "status": old_product_status  # старый статус
         }
+        
         json_after = {
             "product_id": str(product.id),
             "seller_id": str(product.seller_id),
             "title": product.title,
-            "status": ProductStatus.ON_MODERATION.value if needs_status_change else product.status
+            "status": product.status  # новый статус
         }
+        
         background_tasks.add_task(
             send_event_to_moderation_sync,
             product_id=product.id,
@@ -319,7 +346,7 @@ def update_sku(
             category_id=product.category_id
         )
     
-    # 11. Формируем ответ с реальными данными из БД
+    # 12. Формируем ответ
     return SKUSchema(
         id=db_sku.id,
         product_id=db_sku.product_id,
@@ -364,6 +391,13 @@ def delete_sku(
     if not product:
         raise HTTPException(404, detail={"code": "NOT_FOUND", "message": "Product not found"})
     
+
+    if product.status == ProductStatus.HARD_BLOCKED.value:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "FORBIDDEN", "message": "Cannot delete SKU of hard-blocked product"}
+        )
+    
     if product.seller_id != current_seller.id:
         raise HTTPException(403, detail={"code": "NOT_OWNER", "message": "SKU does not belong to you"})
     
@@ -373,6 +407,10 @@ def delete_sku(
             status_code=status.HTTP_409_CONFLICT,
             detail={"code": "CONFLICT", "message": "Cannot delete SKU with active reserves"}
         )
+
+    sku_count = db.query(SKU).filter(SKU.product_id == product.id).count()
+    if sku_count == 1 and product.status == ProductStatus.ON_MODERATION.value:
+        product.status = ProductStatus.CREATED.value
     
     db.delete(sku)
     db.commit()
