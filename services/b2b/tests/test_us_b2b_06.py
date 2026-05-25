@@ -1,0 +1,615 @@
+"""
+Тесты для US-B2B-06: Создание накладной на поступление товара
+"""
+import pytest
+from uuid import uuid4
+from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
+
+from app.main import app
+from app.database import SessionLocal
+from app.models.category import Category
+from app.models.seller import Seller
+from app.models.product import Product
+from app.models.sku import SKU
+from app.core.security import create_access_token
+from app.schemas.product import ProductStatus
+
+
+@pytest.fixture
+def client():
+    """Тестовый клиент"""
+    return TestClient(app)
+
+
+@pytest.fixture
+def db_session():
+    """Тестовая сессия БД"""
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.rollback()
+        db.close()
+
+
+@pytest.fixture
+def test_category(db_session):
+    """Создаём тестовую категорию"""
+    category = Category(
+        id=uuid4(),
+        name="Test Category",
+        slug=f"test-category-{uuid4()}",
+        level=0,
+        is_active=True
+    )
+    db_session.add(category)
+    db_session.commit()
+    db_session.refresh(category)
+    return category
+
+
+@pytest.fixture
+def test_seller(db_session):
+    """Создаём тестового продавца"""
+    seller = Seller(
+        id=uuid4(),
+        email=f"test_{uuid4().hex[:12]}@example.com",
+        hashed_password="fake_hash",
+        first_name="Test",
+        last_name="Seller",
+        company_name="Test Company",
+        inn=f"{uuid4().hex[:12]}",
+        status="ACTIVE",
+        is_active=True
+    )
+    db_session.add(seller)
+    db_session.commit()
+    db_session.refresh(seller)
+    return seller
+
+
+@pytest.fixture
+def auth_headers(test_seller):
+    """JWT токен для продавца"""
+    access_token = create_access_token(data={"sub": str(test_seller.id)})
+    return {"Authorization": f"Bearer {access_token}"}
+
+
+@pytest.fixture
+def test_product_moderated(db_session, test_category, test_seller):
+    """Товар со статусом MODERATED"""
+    product = Product(
+        id=uuid4(),
+        seller_id=test_seller.id,
+        category_id=test_category.id,
+        title="Moderated Product",
+        slug="moderated-product",
+        description="Description",
+        status=ProductStatus.MODERATED.value,
+        deleted=False,
+        blocked=False,
+        moderation_comment=None,
+        blocking_reason_id=None
+    )
+    db_session.add(product)
+    db_session.flush()
+    
+    sku = SKU(
+        id=uuid4(),
+        product_id=product.id,
+        name="Moderated SKU",
+        price=1000000,
+        cost_price=700000,
+        discount=0,
+        image="/s3/test.jpg",
+        stock_quantity=0,
+        active_quantity=0,
+        reserved_quantity=0,
+        article=None
+    )
+    db_session.add(sku)
+    db_session.commit()
+    db_session.refresh(product)
+    db_session.refresh(sku)
+    return {"product": product, "sku": sku}
+
+
+@pytest.fixture
+def test_product_created(db_session, test_category, test_seller):
+    """Товар со статусом CREATED (не MODERATED)"""
+    product = Product(
+        id=uuid4(),
+        seller_id=test_seller.id,
+        category_id=test_category.id,
+        title="Created Product",
+        slug="created-product",
+        description="Description",
+        status=ProductStatus.CREATED.value,
+        deleted=False,
+        blocked=False,
+        moderation_comment=None,
+        blocking_reason_id=None
+    )
+    db_session.add(product)
+    db_session.flush()
+    
+    sku = SKU(
+        id=uuid4(),
+        product_id=product.id,
+        name="Created SKU",
+        price=1000000,
+        cost_price=700000,
+        discount=0,
+        image="/s3/test.jpg",
+        stock_quantity=0,
+        active_quantity=0,
+        reserved_quantity=0,
+        article=None
+    )
+    db_session.add(sku)
+    db_session.commit()
+    db_session.refresh(sku)
+    return {"product": product, "sku": sku}
+
+
+@pytest.fixture
+def test_other_seller_sku(db_session, test_category, test_seller):
+    """SKU другого продавца"""
+    other_seller = Seller(
+        id=uuid4(),
+        email=f"other_{uuid4().hex[:12]}@example.com",
+        hashed_password="fake_hash",
+        first_name="Other",
+        last_name="Seller",
+        company_name="Other Company",
+        inn=f"{uuid4().hex[:12]}",
+        status="ACTIVE",
+        is_active=True
+    )
+    db_session.add(other_seller)
+    db_session.flush()
+    
+    product = Product(
+        id=uuid4(),
+        seller_id=other_seller.id,
+        category_id=test_category.id,
+        title="Other Product",
+        slug="other-product",
+        description="Description",
+        status=ProductStatus.MODERATED.value,
+        deleted=False,
+        blocked=False,
+        moderation_comment=None,
+        blocking_reason_id=None
+    )
+    db_session.add(product)
+    db_session.flush()
+    
+    sku = SKU(
+        id=uuid4(),
+        product_id=product.id,
+        name="Other SKU",
+        price=1000000,
+        cost_price=700000,
+        discount=0,
+        image="/s3/test.jpg",
+        stock_quantity=0,
+        active_quantity=0,
+        reserved_quantity=0,
+        article=None
+    )
+    db_session.add(sku)
+    db_session.commit()
+    db_session.refresh(sku)
+    return {"sku": sku, "other_seller": other_seller}
+
+
+class TestB2B06AcceptInvoice:
+    """Тесты для приёмки накладной"""
+
+    def test_accept_invoice_full_returns_200_and_accepts(
+        self, client, db_session, auth_headers, test_product_moderated
+    ):
+        """Полная приёмка накладной → ACCEPTED"""
+        # Создаём накладную
+        invoice_resp = client.post(
+            "/api/v1/invoices/",
+            json={
+                "items": [
+                    {
+                        "sku_id": str(test_product_moderated["sku"].id),
+                        "quantity": 10
+                    }
+                ]
+            },
+            headers=auth_headers
+        )
+        assert invoice_resp.status_code == 201
+        invoice_id = invoice_resp.json()["id"]
+
+        # Приёмка без accepted_items (полная)
+        response = client.post(
+            f"/api/v1/invoices/{invoice_id}/accept",
+            json={},
+            headers=auth_headers
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "ACCEPTED"
+        assert data["items"][0]["accepted_quantity"] == 10
+        
+        # Проверяем, что active_quantity SKU увеличился
+        db_session.refresh(test_product_moderated["sku"])
+        assert test_product_moderated["sku"].active_quantity == 10
+
+    def test_accept_invoice_partial_returns_200_and_partially_accepted(
+        self, client, db_session, auth_headers, test_product_moderated
+    ):
+        """Частичная приёмка → PARTIALLY_ACCEPTED"""
+        # Создаём накладную
+        invoice_resp = client.post(
+            "/api/v1/invoices/",
+            json={
+                "items": [
+                    {
+                        "sku_id": str(test_product_moderated["sku"].id),
+                        "quantity": 10
+                    }
+                ]
+            },
+            headers=auth_headers
+        )
+        assert invoice_resp.status_code == 201
+        invoice_id = invoice_resp.json()["id"]
+        invoice_item_id = invoice_resp.json()["items"][0]["id"]
+        
+        # Частичная приёмка
+        response = client.post(
+            f"/api/v1/invoices/{invoice_id}/accept",
+            json={
+                "accepted_items": [
+                    {
+                        "invoice_item_id": invoice_item_id,
+                        "accepted_quantity": 7
+                    }
+                ]
+            },
+            headers=auth_headers
+        )
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "PARTIALLY_ACCEPTED"
+        assert data["items"][0]["accepted_quantity"] == 7
+        
+        # Проверяем active_quantity
+        db_session.refresh(test_product_moderated["sku"])
+        assert test_product_moderated["sku"].active_quantity == 7
+
+    def test_accept_invoice_rejected_returns_200_and_rejected(
+        self, client, db_session, auth_headers, test_product_moderated
+    ):
+        """Отказ от приёмки (accepted_quantity=0) → REJECTED"""
+        # Создаём накладную
+        invoice_resp = client.post(
+            "/api/v1/invoices/",
+            json={
+                "items": [
+                    {
+                        "sku_id": str(test_product_moderated["sku"].id),
+                        "quantity": 10
+                    }
+                ]
+            },
+            headers=auth_headers
+        )
+        assert invoice_resp.status_code == 201
+        invoice_id = invoice_resp.json()["id"]
+        invoice_item_id = invoice_resp.json()["items"][0]["id"]
+        
+        # Отказ от приёмки
+        response = client.post(
+            f"/api/v1/invoices/{invoice_id}/accept",
+            json={
+                "accepted_items": [
+                    {
+                        "invoice_item_id": invoice_item_id,
+                        "accepted_quantity": 0
+                    }
+                ]
+            },
+            headers=auth_headers
+        )
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "REJECTED"
+        assert data["items"][0]["accepted_quantity"] == 0
+        
+        # active_quantity не изменился
+        db_session.refresh(test_product_moderated["sku"])
+        assert test_product_moderated["sku"].active_quantity == 0
+
+    def test_accept_invoice_not_found_returns_404(self, client, auth_headers):
+        """Несуществующая накладная → 404"""
+        response = client.post(
+            f"/api/v1/invoices/{uuid4()}/accept",
+            json={},
+            headers=auth_headers
+        )
+        
+        assert response.status_code == 404
+        error_data = response.json()
+        assert error_data["code"] == "NOT_FOUND"
+
+    def test_accept_invoice_item_not_found_returns_400(
+        self, client, auth_headers, test_product_moderated
+    ):
+        """Несуществующий invoice_item_id → 400"""
+        # Создаём накладную
+        invoice_resp = client.post(
+            "/api/v1/invoices/",
+            json={
+                "items": [
+                    {
+                        "sku_id": str(test_product_moderated["sku"].id),
+                        "quantity": 10
+                    }
+                ]
+            },
+            headers=auth_headers
+        )
+        assert invoice_resp.status_code == 201
+        invoice_id = invoice_resp.json()["id"]
+        
+        # Пробуем приёмку с несуществующим invoice_item_id
+        response = client.post(
+            f"/api/v1/invoices/{invoice_id}/accept",
+            json={
+                "accepted_items": [
+                    {
+                        "invoice_item_id": str(uuid4()),
+                        "accepted_quantity": 5
+                    }
+                ]
+            },
+            headers=auth_headers
+        )
+        
+        assert response.status_code == 400
+        error_data = response.json()
+        assert error_data["code"] == "INVALID_REQUEST"
+
+    def test_accept_invoice_accepted_quantity_exceeds_returns_400(
+        self, client, auth_headers, test_product_moderated
+    ):
+        """accepted_quantity > quantity → 400"""
+        # Создаём накладную
+        invoice_resp = client.post(
+            "/api/v1/invoices/",
+            json={
+                "items": [
+                    {
+                        "sku_id": str(test_product_moderated["sku"].id),
+                        "quantity": 10
+                    }
+                ]
+            },
+            headers=auth_headers
+        )
+        assert invoice_resp.status_code == 201
+        invoice_id = invoice_resp.json()["id"]
+        invoice_item_id = invoice_resp.json()["items"][0]["id"]
+        
+        # Пробуем принять больше чем заявлено
+        response = client.post(
+            f"/api/v1/invoices/{invoice_id}/accept",
+            json={
+                "accepted_items": [
+                    {
+                        "invoice_item_id": invoice_item_id,
+                        "accepted_quantity": 15
+                    }
+                ]
+            },
+            headers=auth_headers
+        )
+        
+        assert response.status_code == 400
+        error_data = response.json()
+        assert error_data["code"] == "INVALID_REQUEST"
+
+class TestB2B06CreateInvoice:
+    """Тесты для создания накладной"""
+
+    def test_create_invoice_with_moderated_sku_returns_201(
+        self, client, auth_headers, test_product_moderated
+    ):
+        """Happy path: создание накладной с MODERATED SKU → 201"""
+        response = client.post(
+            "/api/v1/invoices/",
+            json={
+                "items": [
+                    {
+                        "sku_id": str(test_product_moderated["sku"].id),
+                        "quantity": 10
+                    }
+                ]
+            },
+            headers=auth_headers
+        )
+
+        assert response.status_code == 201
+        data = response.json()
+        assert data["status"] == "CREATED"
+        assert len(data["items"]) == 1
+        assert data["items"][0]["sku_id"] == str(test_product_moderated["sku"].id)
+        assert data["items"][0]["quantity"] == 10
+        assert data["items"][0]["accepted_quantity"] is None
+
+    def test_empty_items_returns_400(self, client, auth_headers):
+        """Пустой список items → 422 Validation Error"""
+        response = client.post(
+            "/api/v1/invoices/",
+            json={"items": []},
+            headers=auth_headers
+        )
+
+        assert response.status_code == 422
+        error_data = response.json()
+        assert error_data["code"] == "INVALID_REQUEST"
+
+    def test_non_moderated_sku_returns_400(
+        self, client, auth_headers, test_product_created
+    ):
+        """SKU товара не-MODERATED → 400"""
+        response = client.post(
+            "/api/v1/invoices/",
+            json={
+                "items": [
+                    {
+                        "sku_id": str(test_product_created["sku"].id),
+                        "quantity": 10
+                    }
+                ]
+            },
+            headers=auth_headers
+        )
+
+        assert response.status_code == 400
+        error_data = response.json()
+        assert error_data["code"] == "INVALID_REQUEST"
+        assert "MODERATED" in error_data["message"]
+
+    def test_others_sku_returns_403(
+        self, client, auth_headers, test_other_seller_sku
+    ):
+        """SKU чужого продавца → 403"""
+        response = client.post(
+            "/api/v1/invoices/",
+            json={
+                "items": [
+                    {
+                        "sku_id": str(test_other_seller_sku["sku"].id),
+                        "quantity": 10
+                    }
+                ]
+            },
+            headers=auth_headers
+        )
+
+        assert response.status_code == 403
+        error_data = response.json()
+        assert error_data["code"] == "NOT_OWNER"
+
+    def test_sku_not_found_returns_404(self, client, auth_headers):
+        """Несуществующий SKU → 404"""
+        response = client.post(
+            "/api/v1/invoices/",
+            json={
+                "items": [
+                    {
+                        "sku_id": str(uuid4()),
+                        "quantity": 10
+                    }
+                ]
+            },
+            headers=auth_headers
+        )
+
+        assert response.status_code == 404
+        error_data = response.json()
+        assert error_data["code"] == "NOT_FOUND"
+
+    def test_quantity_zero_returns_400(
+        self, client, auth_headers, test_product_moderated
+    ):
+        """quantity = 0 → 422 Validation Error"""
+        response = client.post(
+            "/api/v1/invoices/",
+            json={
+                "items": [
+                    {
+                        "sku_id": str(test_product_moderated["sku"].id),
+                        "quantity": 0
+                    }
+                ]
+            },
+            headers=auth_headers
+        )
+
+        assert response.status_code == 422
+        error_data = response.json()
+        assert error_data["code"] == "INVALID_REQUEST"
+
+    def test_quantity_negative_returns_400(
+        self, client, auth_headers, test_product_moderated
+    ):
+        """quantity < 0 → 422 Validation Error"""
+        response = client.post(
+            "/api/v1/invoices/",
+            json={
+                "items": [
+                    {
+                        "sku_id": str(test_product_moderated["sku"].id),
+                        "quantity": -5
+                    }
+                ]
+            },
+            headers=auth_headers
+        )
+
+        assert response.status_code == 422
+        error_data = response.json()
+        assert error_data["code"] == "INVALID_REQUEST"
+
+    def test_multiple_skus_in_one_invoice(
+        self, client, auth_headers, test_product_moderated, db_session
+    ):
+        """Несколько SKU в одной накладной"""
+        # Создаём второй MODERATED SKU
+        product2 = Product(
+            id=uuid4(),
+            seller_id=test_product_moderated["product"].seller_id,
+            category_id=test_product_moderated["product"].category_id,
+            title="Product 2",
+            slug="product-2",
+            description="Desc",
+            status=ProductStatus.MODERATED.value,
+            deleted=False,
+            blocked=False
+        )
+        db_session.add(product2)
+        db_session.flush()
+        
+        sku2 = SKU(
+            id=uuid4(),
+            product_id=product2.id,
+            name="SKU 2",
+            price=500000,
+            cost_price=300000,
+            discount=0,
+            image="/s3/sku2.jpg",
+            stock_quantity=0,
+            active_quantity=0,
+            reserved_quantity=0
+        )
+        db_session.add(sku2)
+        db_session.commit()
+        
+        response = client.post(
+            "/api/v1/invoices/",
+            json={
+                "items": [
+                    {"sku_id": str(test_product_moderated["sku"].id), "quantity": 10},
+                    {"sku_id": str(sku2.id), "quantity": 5}
+                ]
+            },
+            headers=auth_headers
+        )
+
+        assert response.status_code == 201
+        data = response.json()
+        assert len(data["items"]) == 2

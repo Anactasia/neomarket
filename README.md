@@ -34,6 +34,15 @@ docker-compose exec b2b-service pytest tests/test_us_b2b_04.py -v
 
 # Запустить только тесты US-B2B-05
 docker-compose exec b2b-service pytest tests/test_us_b2b_05.py -v
+
+# Запустить только тесты US-B2B-06
+docker-compose exec b2b-service pytest tests/test_us_b2b_06.py -v
+
+# Запустить только тесты US-B2B-07
+docker-compose exec b2b-service pytest tests/test_us_b2b_07.py -v
+
+# Запустить только тесты US-B2B-08
+docker-compose exec b2b-service pytest tests/test_us_b2b_08.py -v
 ```
 
 

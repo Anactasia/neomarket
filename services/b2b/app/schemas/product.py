@@ -108,3 +108,75 @@ class Product(BaseModel):
     
     class Config:
         from_attributes = True
+
+
+# ───────────────────── Public Catalog Schemas ─────────────────────
+
+class ProductPublicShortResponse(BaseModel):
+    """Краткая карточка товара для витрины"""
+    id: UUID
+    title: str
+    slug: str
+    status: ProductStatus
+    category_id: UUID
+    created_at: datetime
+    min_price: Optional[int] = None
+    cover_image: Optional[str] = None
+    
+    class Config:
+        from_attributes = True
+
+
+class SKUPublicResponse(BaseModel):
+    """Публичный SKU (без cost_price, reserved_quantity)"""
+    id: UUID
+    product_id: UUID
+    name: str
+    price: int
+    discount: int
+    stock_quantity: int
+    active_quantity: int
+    article: Optional[str] = None
+    images: List[ProductImageResponse] = []
+    characteristics: List[CharacteristicValueResponse] = []
+    
+    class Config:
+        from_attributes = True
+
+
+class ProductPublicResponse(BaseModel):
+    """Полная публичная карточка товара для витрины"""
+    id: UUID
+    seller_id: UUID
+    category_id: UUID
+    title: str
+    slug: str
+    description: str
+    status: ProductStatus
+    images: List[ProductImageResponse]
+    characteristics: List[CharacteristicValueResponse]
+    skus: List[SKUPublicResponse]
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    
+    class Config:
+        from_attributes = True
+
+
+class ProductPublicPaginatedResponse(BaseModel):
+    """Пагинированный ответ публичного каталога"""
+    items: List[ProductPublicShortResponse]
+    total_count: int
+    limit: int
+    offset: int
+    
+    class Config:
+        from_attributes = True
+
+
+class BatchProductIdsRequest(BaseModel):
+    """Запрос batch-получения товаров по ID"""
+    product_ids: List[UUID] = Field(..., min_length=1, max_length=100, description="Список product_id (макс 100)")
+    
+    class Config:
+        from_attributes = True
