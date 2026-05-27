@@ -8,7 +8,7 @@ from app.api.skus import router as skus_router
 from app.api.invoices import router as invoices_router
 from app.api.reserve import router as reserve_router
 from app.api.internal import router as internal_router
-from app.api.public import router as public_router  # ← ДОБАВИТЬ
+from app.api.public import router as public_router  
 
 # Основной роутер для API v1
 router = APIRouter(prefix="/api/v1")
@@ -21,4 +21,4 @@ router.include_router(skus_router, prefix="/skus", tags=["SKU"])
 router.include_router(invoices_router, prefix="/invoices", tags=["Invoices"])
 router.include_router(reserve_router, prefix="/inventory", tags=["Inventory"])
 router.include_router(internal_router, prefix="/internal", tags=["Internal"])
-router.include_router(public_router, prefix="/public", tags=["Public Catalog"])  # ← ДОБАВИТЬ
+router.include_router(public_router, prefix="/public", tags=["Public Catalog"])  

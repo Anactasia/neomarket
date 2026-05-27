@@ -45,7 +45,7 @@ class BlockingReason(BaseModel):
 
 class ProductCreate(BaseModel):
     title: str = Field(..., min_length=1, max_length=255)
-    description: Optional[str] = Field(None, max_length=5000)
+    description: str = Field(..., min_length=1, max_length=5000)
     category_id: UUID
     images: List[ProductImageCreate] = Field(default_factory=list)
     characteristics: List[CharacteristicValue] = Field(default_factory=list)

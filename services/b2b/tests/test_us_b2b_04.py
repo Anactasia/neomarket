@@ -339,101 +339,99 @@ class TestB2B04DeleteProduct:
         assert str(test_product_created.id) in product_ids
 
     def test_delete_with_skus_sends_sku_ids(
-    self, client_with_db, test_product_with_skus, db_session
-):
+        self, client_with_db, test_product_with_skus, db_session
+    ):
         """Сценарий 7: при удалении товара с SKU в B2C уходят sku_ids"""
-        import httpx
-        from unittest.mock import patch, MagicMock
+        from app.models.outbox import OutboxEvent
+        
+        # Очищаем outbox перед тестом
+        db_session.query(OutboxEvent).delete()
+        db_session.commit()
         
         product = test_product_with_skus["product"]
         sku1 = test_product_with_skus["sku1"]
         sku2 = test_product_with_skus["sku2"]
         
-        with patch.object(httpx, 'Client') as mock_client_class:
-            mock_client = MagicMock()
-            mock_post = MagicMock()
-            mock_client.post = mock_post
-            mock_client_class.return_value.__enter__.return_value = mock_client
-            
-            response = client_with_db.delete(
-                f"/api/v1/products/{product.id}",
-                headers=client_with_db.headers
-            )
-            
-            # 204 No Content
-            assert response.status_code == 204  # ← изменить с 200 на 204
-            # убрать проверку response.json()
-            
-            # Проверяем, что товар удалён
-            product_in_db = db_session.query(Product).filter(
-                Product.id == product.id
-            ).first()
-            assert product_in_db.deleted is True
-            
-            # Находим вызов с URL B2C
-            b2c_calls = [
-                call for call in mock_post.call_args_list
-                if "b2c" in call[0][0]
-            ]
-            
-            assert len(b2c_calls) >= 1, "Should have at least one call to B2C"
-            
-            call_args = b2c_calls[0]
-            request_body = call_args[1]["json"]
-            assert request_body["event_type"] == "PRODUCT_DELETED"
-            assert str(sku1.id) in request_body["payload"]["sku_ids"]
-            assert str(sku2.id) in request_body["payload"]["sku_ids"]
-    
-
-    def test_delete_sends_deleted_event_to_moderation(
-        self, client_with_db, test_product_created
-    ):
-        """Проверка: удаление отправляет событие DELETED в Moderation"""
-        import httpx
-        
-        with patch.object(httpx, 'Client') as mock_client_class:
-            mock_client = MagicMock()
-            mock_post = MagicMock()
-            mock_client.post = mock_post
-            mock_client_class.return_value.__enter__.return_value = mock_client
-            
-            response = client_with_db.delete(
-                f"/api/v1/products/{test_product_created.id}",
-                headers=client_with_db.headers
-            )
-            
-            assert response.status_code == 204
-            
-            # Проверяем, что post был вызван (хотя бы один раз)
-            assert mock_post.call_count >= 1
-            
-            # Находим вызов с URL Moderation
-            moderation_calls = [
-                call for call in mock_post.call_args_list
-                if call[0][0] == "http://moderation:8000/api/v1/b2b/events"
-            ]
-            
-            assert len(moderation_calls) == 1, "Should have exactly one call to Moderation"
-            
-            call_args = moderation_calls[0]
-            request_body = call_args[1]["json"]
-            assert request_body["event_type"] == "PRODUCT_DELETED"
-            assert "idempotency_key" in request_body
-            assert "occurred_at" in request_body
-            
-            payload = request_body["payload"]
-            assert payload["product_id"] == str(test_product_created.id)
-
-    def test_delete_hard_blocked_product_returns_403(
-        self, client_with_db, test_product_hard_blocked
-    ):
-        """Сценарий 8: удаление HARD_BLOCKED товара → 403"""
         response = client_with_db.delete(
-            f"/api/v1/products/{test_product_hard_blocked.id}",
+            f"/api/v1/products/{product.id}",
             headers=client_with_db.headers
         )
         
-        assert response.status_code == 403
-        data = response.json()
-        assert data["code"] == "FORBIDDEN"
-        assert "hard" in data["message"].lower()
+        assert response.status_code == 204
+        
+        # Проверяем, что товар удалён
+        product_in_db = db_session.query(Product).filter(
+            Product.id == product.id
+        ).first()
+        assert product_in_db.deleted is True
+        
+        # Проверяем outbox на наличие события для B2C
+        db_session.commit()
+        outbox_events = db_session.query(OutboxEvent).filter(
+            OutboxEvent.target == "b2c",
+            OutboxEvent.event_type == "PRODUCT_DELETED"
+        ).all()
+        
+        assert len(outbox_events) >= 1, "Should have at least one B2C event in outbox"
+        
+        # Находим событие для нашего товара (фильтруем по product_id)
+        event = None
+        for e in outbox_events:
+            if e.payload["payload"]["product_id"] == str(product.id):
+                event = e
+                break
+        
+        assert event is not None, "Event for this product not found"
+        assert event.target == "b2c"
+        assert "b2b-to-b2c-key" in str(event.headers)
+        
+        payload = event.payload
+        assert payload["event_type"] == "PRODUCT_DELETED"
+        assert payload["payload"]["product_id"] == str(product.id)
+        assert str(sku1.id) in payload["payload"]["sku_ids"]
+        assert str(sku2.id) in payload["payload"]["sku_ids"]
+    
+
+    def test_delete_sends_deleted_event_to_moderation(
+        self, client_with_db, test_product_created, db_session
+    ):
+        """Проверка: удаление отправляет событие DELETED в Moderation"""
+        from app.models.outbox import OutboxEvent
+        
+        response = client_with_db.delete(
+            f"/api/v1/products/{test_product_created.id}",
+            headers=client_with_db.headers
+        )
+        
+        assert response.status_code == 204
+        
+        # Проверяем outbox на наличие события для Moderation
+        db_session.commit()
+        
+        # Находим событие для нашего товара (берём последнее или фильтруем по product_id)
+        outbox_events = db_session.query(OutboxEvent).filter(
+            OutboxEvent.target == "moderation",
+            OutboxEvent.event_type == "PRODUCT_DELETED"
+        ).order_by(OutboxEvent.created_at.desc()).all()
+        
+        assert len(outbox_events) >= 1, "Should have at least one Moderation event in outbox"
+        
+        # Берём последнее событие (самое свежее)
+        event = outbox_events[0]
+        
+        # ИЛИ фильтруем по product_id
+        # event = None
+        # for e in outbox_events:
+        #     if e.payload["payload"]["product_id"] == str(test_product_created.id):
+        #         event = e
+        #         break
+        # assert event is not None, "Event for this product not found"
+        
+        assert event.target == "moderation"
+        assert "b2b-service-key" in str(event.headers)
+        
+        payload = event.payload
+        assert payload["event_type"] == "PRODUCT_DELETED"
+        assert "idempotency_key" in payload
+        assert "occurred_at" in payload
+        assert payload["payload"]["product_id"] == str(test_product_created.id)

@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Header
+from fastapi import APIRouter, Depends, HTTPException, status, Header
+from app.services.outbox import save_to_outbox
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from typing import List, Optional
@@ -190,6 +191,7 @@ def send_event_to_moderation_sync(
     product_id: UUID,
     seller_id: UUID,
     idempotency_key: str,
+    db: Session,  # ← ДОБАВЛЯЕМ db
     moderation_url: str = "http://moderation:8000",
     event_type: str = "PRODUCT_EDITED",
     json_before: Optional[dict] = None,
@@ -197,23 +199,9 @@ def send_event_to_moderation_sync(
     category_id: Optional[UUID] = None
 ):
     """
-    Отправляет событие (PRODUCT_CREATED или PRODUCT_EDITED) в Moderation Service синхронно.
-    Для production рекомендуется outbox pattern или асинхронная очередь.
-    
-    Соответствует спецификации neomarket-moderation.yaml:
-    - URL: POST /api/v1/b2b/events
-    - Тело: IncomingB2BEvent (event_type, idempotency_key, occurred_at, payload)
-    
-    event_type: "PRODUCT_CREATED" или "PRODUCT_EDITED"
-    payload:
-      - PRODUCT_CREATED: {product_id, seller_id, category_id?, json_after}
-      - PRODUCT_EDITED: {product_id, seller_id, category_id?, json_before, json_after}
+    Сохраняет событие в outbox вместо прямой отправки.
     """
-    import httpx
     from datetime import datetime, timezone
-    import logging
-    
-    logger = logging.getLogger(__name__)
     
     payload: dict = {
         "product_id": str(product_id),
@@ -227,6 +215,12 @@ def send_event_to_moderation_sync(
     elif event_type == "PRODUCT_EDITED":
         payload["json_before"] = json_before or {}
         payload["json_after"] = json_after or {}
+    elif event_type == "PRODUCT_DELETED":
+        # для DELETE передаём json_before/json_after как есть
+        if json_before:
+            payload["json_before"] = json_before
+        if json_after:
+            payload["json_after"] = json_after
     
     event_payload = {
         "event_type": event_type,
@@ -235,47 +229,30 @@ def send_event_to_moderation_sync(
         "payload": payload
     }
     
-    try:
-        with httpx.Client(timeout=5.0) as client:
-            client.post(
-                f"{moderation_url}/api/v1/b2b/events",
-                json=event_payload,
-                headers={"X-Service-Key": "b2b-service-key"}
-            )
-    except Exception as e:
-        # fire-and-forget: не блокируем ответ при недоступности Moderation
-        # Но логируем потерю события для advisory
-        logger.warning(
-            f"Failed to send {event_type} event to Moderation Service: {e}. "
-            f"Event lost: product_id={product_id}, idempotency_key={idempotency_key}"
-        )
+    # Сохраняем в outbox вместо прямой отправки
+    save_to_outbox(
+        db=db,
+        event_type=event_type,
+        target="moderation",
+        url=f"{moderation_url}/api/v1/b2b/events",
+        payload=event_payload,
+        headers={"X-Service-Key": "b2b-service-key"}
+    )
     
 
 def send_event_to_b2c_sync(
     product_id: UUID, 
     sku_ids: List[UUID],
     idempotency_key: str,
+    db: Session,  # ← ДОБАВЛЯЕМ db
     b2c_url: str = "http://b2c:8000",
     event_type: str = "PRODUCT_DELETED"
 ):
     """
-    Отправляет событие (PRODUCT_DELETED, PRODUCT_BLOCKED и т.п.) в B2C Service.
-    
-    Соответствует спецификации neomarket-b2c.yaml:
-    - URL: POST /api/v1/b2b/events
-    - Тело: B2BEvent (event_type, idempotency_key, occurred_at, payload)
-    
-    event_type: "PRODUCT_DELETED", "PRODUCT_BLOCKED", "PRODUCT_HARD_BLOCKED", ...
-    payload:
-      - PRODUCT_DELETED: {product_id, sku_ids}
+    Сохраняет событие в outbox вместо прямой отправки.
     """
-    import httpx
     from datetime import datetime, timezone
-    import logging
     
-    logger = logging.getLogger(__name__)
-    
-    # Payload для PRODUCT_DELETED включает sku_ids согласно канону
     payload = {
         "product_id": str(product_id),
         "sku_ids": [str(sku_id) for sku_id in sku_ids]
@@ -288,18 +265,15 @@ def send_event_to_b2c_sync(
         "payload": payload
     }
     
-    try:
-        with httpx.Client(timeout=5.0) as client:
-            client.post(
-                f"{b2c_url}/api/v1/b2b/events",
-                json=event_payload,
-                headers={"X-Service-Key": "b2b-to-b2c-key"}
-            )
-    except Exception as e:
-        logger.warning(
-            f"Failed to send {event_type} event to B2C Service: {e}. "
-            f"Event lost: product_id={product_id}, idempotency_key={idempotency_key}"
-        )
+    # Сохраняем в outbox
+    save_to_outbox(
+        db=db,
+        event_type=event_type,
+        target="b2c",
+        url=f"{b2c_url}/api/v1/b2b/events",
+        payload=event_payload,
+        headers={"X-Service-Key": "b2b-to-b2c-key"}
+    )
     
 
 @router.post("/", response_model=ProductResponse, status_code=status.HTTP_201_CREATED)
@@ -476,7 +450,6 @@ def get_product(
 def update_product(
     product_id: UUID, 
     product_update: ProductUpdate,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_seller: Seller = Depends(get_current_seller)
 ):
@@ -530,10 +503,6 @@ def update_product(
     if product.status in [ProductStatus.MODERATED.value, ProductStatus.BLOCKED.value]:
         product.status = ProductStatus.ON_MODERATION.value
     
-    db.commit()
-    db.refresh(product)
-    product.skus
-    
     # 7. Отправляем событие EDITED в Moderation (если нужно)
     # Отправляем всегда, кроме случая, когда товар только создан и не блокирован
     should_send_event = (
@@ -541,11 +510,13 @@ def update_product(
         product.blocked or
         old_status in [ProductStatus.MODERATED.value, ProductStatus.BLOCKED.value]
     )
-    
+
+    print(f"DEBUG: should_send_event={should_send_event}, old_status={old_status}, new_status={product.status}")
+
     if should_send_event:
+        print(f"DEBUG: ВХОДИМ, отправляем PRODUCT_EDITED, product_id={product.id}")
         idempotency_key = uuid_module.uuid4()
         
-        # Формируем снапшоты для Moderation Service
         json_before = {
             "product_id": str(product.id),
             "seller_id": str(product.seller_id),
@@ -564,25 +535,34 @@ def update_product(
             "category_id": str(product.category_id) if product.category_id else None
         }
         
-        background_tasks.add_task(
-            send_event_to_moderation_sync,
+        # Сохраняем в outbox ПЕРЕД commit
+        send_event_to_moderation_sync(
             product_id=product.id,
             seller_id=product.seller_id,
             idempotency_key=idempotency_key,
+            db=db,
             event_type="PRODUCT_EDITED",
             json_before=json_before,
             json_after=json_after,
             category_id=product.category_id
         )
+        print(f"DEBUG: send_event_to_moderation_sync ВЫЗВАН")
     
-    # 8. ВАЖНО: возвращаем обновленный товар
+    else:
+        print(f"DEBUG: НЕ ВХОДИМ, should_send_event=False")
+    
+    # 8. ВАЖНО: commit после сохранения outbox
+    db.commit()
+    db.refresh(product)
+    product.skus
+    
+    # 9. Возвращаем обновленный товар
     return product_to_full_response(product, db)
     
 
 @router.delete("/{product_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_product(
     product_id: UUID, 
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_seller: Seller = Depends(get_current_seller)
 ):
@@ -635,272 +615,27 @@ def delete_product(
     db.commit()
     db.refresh(product)
     
-    # 7. Отправляем событие DELETED в Moderation (background task)
+    # 7. Отправляем событие DELETED в Moderation
     moderation_idempotency_key = uuid_module.uuid4()
-    background_tasks.add_task(
-        send_event_to_moderation_sync,
+    send_event_to_moderation_sync( 
         product_id=product.id,
         seller_id=product.seller_id,
         idempotency_key=moderation_idempotency_key,
+        db=db,  # ← передаём db
         event_type="PRODUCT_DELETED",
         json_before={"deleted": False},
         json_after={"deleted": True},
         category_id=product.category_id
     )
-    
-    # 8. Отправляем событие PRODUCT_DELETED в B2C (background task)
+
+    # 8. Отправляем событие PRODUCT_DELETED в B2C
     b2c_idempotency_key = uuid_module.uuid4()
-    background_tasks.add_task(
-        send_event_to_b2c_sync,
+    send_event_to_b2c_sync( 
         product_id=product.id,
         sku_ids=sku_ids,
         idempotency_key=b2c_idempotency_key,
+        db=db,  
         event_type="PRODUCT_DELETED"
     )
     
     return None
-
-
-# ───────────────────── PUBLIC CATALOG (для B2C) ─────────────────────
-
-@router.get("/public/products", response_model=ProductPublicPaginatedResponse)
-def get_public_products(
-    limit: int = 20,
-    offset: int = 0,
-    category_id: Optional[UUID] = None,
-    search: Optional[str] = None,
-    min_price: Optional[int] = None,
-    max_price: Optional[int] = None,
-    seller_id: Optional[UUID] = None,
-    sort: str = "created_desc",
-    x_service_key: Optional[str] = Header(None, alias="X-Service-Key"),
-    db: Session = Depends(get_db)
-):
-    """
-    Публичный каталог товаров для B2C (витрина).
-    
-    Авторизация: X-Service-Key (межсервисный вызов)
-    Условия видимости:
-    - status = MODERATED
-    - deleted = false
-    - хотя бы один SKU имеет active_quantity > 0
-    """
-    # Проверка X-Service-Key
-    if x_service_key is None or not verify_service_key(x_service_key):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"code": "UNAUTHORIZED", "message": "X-Service-Key is required"}
-        )
-    
-    # Валидация sort
-    valid_sorts = ["price_asc", "price_desc", "created_desc", "popular"]
-    if sort not in valid_sorts:
-        sort = "created_desc"
-    
-    # Фильтр по наличию SKU с остатком через any()
-    query = db.query(Product).filter(
-        Product.status == ProductStatus.MODERATED.value,
-        Product.deleted == False,
-        Product.skus.any(SKU.active_quantity > 0)
-    )
-    
-    # Фильтр по категории
-    if category_id:
-        query = query.filter(Product.category_id == category_id)
-    
-    # Фильтр по продавцу
-    if seller_id:
-        query = query.filter(Product.seller_id == seller_id)
-    
-    # Текстовый поиск
-    if search:
-        query = query.filter(
-            (Product.title.ilike(f"%{search}%")) | 
-            (Product.description.ilike(f"%{search}%"))
-        )
-    
-    # Фильтры по цене (через any() для SKU)
-    if min_price is not None:
-        query = query.filter(Product.skus.any(SKU.price >= min_price))
-    
-    if max_price is not None:
-        query = query.filter(Product.skus.any(SKU.price <= max_price))
-    
-    # Считаем общее количество
-    total_count = query.count()
-    
-    # Сортировка
-    if sort == "price_asc":
-        # Сортировка по минимальной цене SKU через субзапрос
-        min_price_subq = db.query(
-            SKU.product_id,
-            func.min(SKU.price).label("min_price")
-        ).filter(
-            SKU.product_id == Product.id,
-            SKU.active_quantity > 0
-        ).correlate(Product).as_scalar()
-        query = query.order_by(min_price_subq.asc())
-    elif sort == "price_desc":
-        min_price_subq = db.query(
-            SKU.product_id,
-            func.min(SKU.price).label("min_price")
-        ).filter(
-            SKU.product_id == Product.id,
-            SKU.active_quantity > 0
-        ).correlate(Product).as_scalar()
-        query = query.order_by(min_price_subq.desc())
-    elif sort == "created_desc":
-        query = query.order_by(Product.created_at.desc())
-    elif sort == "popular":
-        # Популярность = количество продаж (реализуем как случайную сортировку для MVP)
-        # В продакшене: order_by(func.random() или сортировка по количеству заказов)
-        query = query.order_by(func.random())
-    
-    # Пагинация
-    products = query.offset(offset).limit(limit).all()
-    
-    # Формируем ответ
-    result_items = []
-    for product in products:
-        # Получаем минимальную цену среди SKU с остатком
-        skus_with_stock = [sku for sku in product.skus if sku.active_quantity > 0]
-        min_price_val = min([sku.price for sku in skus_with_stock], default=None)
-        
-        # Находим главное изображение
-        cover_image = None
-        if product.images:
-            cover_image = product.images[0].url if product.images else None
-        
-        result_items.append(ProductPublicShortResponse(
-            id=product.id,
-            title=product.title,
-            slug=product.slug or "",
-            status=ProductStatus(product.status),
-            category_id=product.category_id,
-            created_at=product.created_at,
-            min_price=min_price_val,
-            cover_image=cover_image
-        ))
-    
-    return ProductPublicPaginatedResponse(
-        items=result_items,
-        total_count=total_count,
-        limit=limit,
-        offset=offset
-    )
-
-
-@router.post("/public/products/batch", response_model=List[ProductPublicResponse])
-def get_public_products_batch(
-    request: BatchProductIdsRequest,
-    x_service_key: Optional[str] = Header(None, alias="X-Service-Key"),
-    db: Session = Depends(get_db)
-):
-    """
-    Batch-запрос публичных карточек товаров по списку ID.
-    
-    Используется B2C для отображения подборок и избранного.
-    Возвращает только видимые товары (без 404 для скрытых).
-    
-    Авторизация: X-Service-Key
-    """
-    # Проверка X-Service-Key
-    if x_service_key is None or not verify_service_key(x_service_key):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"code": "UNAUTHORIZED", "message": "X-Service-Key is required"}
-        )
-    
-    # Получаем товары по ID с фильтрацией видимости
-    products = db.query(Product).filter(
-        Product.id.in_(request.product_ids),
-        Product.status == ProductStatus.MODERATED.value,
-        Product.deleted == False
-    ).all()
-    
-    # Формируем ответ с полными данными
-    result = []
-    for product in products:
-        result.append(product_to_public_response(product, db))
-    
-    return result
-
-
-@router.get("/public/products/{product_id}", response_model=ProductPublicResponse)
-def get_public_product(
-    product_id: UUID,
-    x_service_key: Optional[str] = Header(None, alias="X-Service-Key"),
-    db: Session = Depends(get_db)
-):
-    """
-    Публичная карточка товара для витрины.
-    
-    Авторизация: X-Service-Key
-    """
-    # Проверка X-Service-Key
-    if x_service_key is None or not verify_service_key(x_service_key):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"code": "UNAUTHORIZED", "message": "X-Service-Key is required"}
-        )
-    
-    # Получаем товар
-    product = db.query(Product).filter(
-        Product.id == product_id,
-        Product.status == ProductStatus.MODERATED.value,
-        Product.deleted == False
-    ).first()
-    
-    if not product:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": "NOT_FOUND", "message": "Product not found"}
-        )
-    
-    return product_to_public_response(product, db)
-
-
-@router.get("/public/skus/{sku_id}", response_model=SKUPublicResponse)
-def get_public_sku(
-    sku_id: UUID,
-    x_service_key: Optional[str] = Header(None, alias="X-Service-Key"),
-    db: Session = Depends(get_db)
-):
-    """
-    Публичный SKU для витрины (без cost_price, reserved_quantity).
-    
-    Авторизация: X-Service-Key
-    """
-    # Проверка X-Service-Key
-    if x_service_key is None or not verify_service_key(x_service_key):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"code": "UNAUTHORIZED", "message": "X-Service-Key is required"}
-        )
-    
-    # Получаем SKU с проверкой видимости товара
-    sku = db.query(SKU).join(Product).filter(
-        SKU.id == sku_id,
-        Product.status == ProductStatus.MODERATED.value,
-        Product.deleted == False
-    ).first()
-    
-    if not sku:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": "NOT_FOUND", "message": "SKU not found"}
-        )
-    
-    # Формируем ответ без чувствительных полей
-    return SKUPublicResponse(
-        id=sku.id,
-        product_id=sku.product_id,
-        name=sku.name,
-        price=sku.price,
-        discount=sku.discount,
-        stock_quantity=sku.stock_quantity,
-        active_quantity=sku.active_quantity,
-        article=sku.article,
-        images=[],
-        characteristics=[]
-    )

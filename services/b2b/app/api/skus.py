@@ -1,9 +1,10 @@
 # app/api/skus.py
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from uuid import UUID
 import uuid as uuid_module
+from app.services.outbox import save_to_outbox
 
 from app.database import get_db
 from app.models.sku import SKU, SKUCharacteristic
@@ -38,6 +39,7 @@ def send_event_to_moderation_sync(
     product_id: UUID,
     seller_id: UUID,
     idempotency_key: str,
+    db: Session,  # ← ДОБАВЛЯЕМ db
     moderation_url: str = "http://moderation:8000",
     event_type: str = "PRODUCT_CREATED",
     json_before: Optional[dict] = None,
@@ -45,23 +47,9 @@ def send_event_to_moderation_sync(
     category_id: Optional[UUID] = None
 ):
     """
-    Отправляет событие (PRODUCT_CREATED или PRODUCT_EDITED) в Moderation Service синхронно.
-    Для production рекомендуется outbox pattern или асинхронная очередь.
-    
-    Соответствует спецификации neomarket-moderation.yaml:
-    - URL: POST /api/v1/b2b/events
-    - Тело: IncomingB2BEvent (event_type, idempotency_key, occurred_at, payload)
-    
-    event_type: "PRODUCT_CREATED" или "PRODUCT_EDITED"
-    payload:
-      - PRODUCT_CREATED: {product_id, seller_id, category_id?, json_after}
-      - PRODUCT_EDITED: {product_id, seller_id, category_id?, json_before, json_after}
+    Сохраняет событие в outbox вместо прямой отправки.
     """
-    import httpx
     from datetime import datetime, timezone
-    import logging
-    
-    logger = logging.getLogger(__name__)
     
     payload: dict = {
         "product_id": str(product_id),
@@ -83,26 +71,20 @@ def send_event_to_moderation_sync(
         "payload": payload
     }
     
-    try:
-        with httpx.Client(timeout=5.0) as client:
-            client.post(
-                f"{moderation_url}/api/v1/b2b/events",
-                json=event_payload,
-                headers={"X-Service-Key": "b2b-service-key"}
-            )
-    except Exception as e:
-        # fire-and-forget: не блокируем ответ при недоступности Moderation
-        # Но логируем потерю события для advisory
-        logger.warning(
-            f"Failed to send {event_type} event to Moderation Service: {e}. "
-            f"Event lost: product_id={product_id}, idempotency_key={idempotency_key}"
-        )
+    # Сохраняем в outbox
+    save_to_outbox(
+        db=db,
+        event_type=event_type,
+        target="moderation",
+        url=f"{moderation_url}/api/v1/b2b/events",
+        payload=event_payload,
+        headers={"X-Service-Key": "b2b-service-key"}
+    )
     
 
 @router.post("/", response_model=SKUSchema, status_code=status.HTTP_201_CREATED)
 def create_sku(
     sku: SKUCreateWithValidation,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_seller: Seller = Depends(get_current_seller)
 ):
@@ -125,19 +107,17 @@ def create_sku(
     if product.status == ProductStatus.HARD_BLOCKED.value:
         error_response("FORBIDDEN", "Cannot add SKU to hard-blocked product", 403)
     
-    # 4. Проверяем наличие images в запросе (минимум одно)
-    if not sku.images or len(sku.images) == 0:
-        error_response("INVALID_REQUEST", "At least one image is required", 400)
     
-    # 5. Создаём SKU (используем URL первого изображения для поля image)
-    first_image = sku.images[0]
+    
+    # 4. Создаём SKU (используем URL первого изображения для поля image)
+    first_image = sku.images[0] if sku.images else None
     db_sku = SKU(
         product_id=sku.product_id,
         name=sku.name,
         price=sku.price,
         cost_price=sku.cost_price,
         discount=sku.discount,
-        image=first_image.url,
+        image=first_image.url if first_image else None,  
         stock_quantity=0,
         active_quantity=0,
         reserved_quantity=0,
@@ -146,7 +126,7 @@ def create_sku(
     db.add(db_sku)
     db.flush()
     
-    # 6. Сохраняем характеристики SKU
+    # 5. Сохраняем характеристики SKU
     for char in sku.characteristics:
         db_char = SKUCharacteristic(
             sku_id=db_sku.id,
@@ -154,12 +134,12 @@ def create_sku(
         )
         db.add(db_char)
     
-    # 7. Проверяем, первый ли это SKU для товара и нужно ли re-moderation
+    # 6. Проверяем, первый ли это SKU для товара и нужно ли re-moderation
     sku_count = db.query(SKU).filter(SKU.product_id == sku.product_id).count()
     is_first_sku = sku_count == 1 and product.status == ProductStatus.CREATED.value
     needs_re_moderation = product.status in [ProductStatus.MODERATED.value, ProductStatus.BLOCKED.value]
     
-    # 8. Меняем статус товара при необходимости
+    # 7. Меняем статус товара при необходимости
     if is_first_sku or needs_re_moderation:
         product.status = ProductStatus.ON_MODERATION.value
         db.flush()
@@ -167,7 +147,7 @@ def create_sku(
     db.commit()
     db.refresh(db_sku)
     
-    # 9. Отправляем событие в Moderation (background task)
+    # 8. Отправляем событие в Moderation
     if is_first_sku:
         idempotency_key = uuid_module.uuid4()
         json_after = {
@@ -176,11 +156,11 @@ def create_sku(
             "title": product.title,
             "status": product.status
         }
-        background_tasks.add_task(
-            send_event_to_moderation_sync,
+        send_event_to_moderation_sync(  
             product_id=sku.product_id,
             seller_id=product.seller_id,
             idempotency_key=idempotency_key,
+            db=db,  # ← добавили db
             event_type="PRODUCT_CREATED",
             json_after=json_after,
             category_id=product.category_id
@@ -199,18 +179,17 @@ def create_sku(
             "title": product.title,
             "status": ProductStatus.ON_MODERATION.value
         }
-        background_tasks.add_task(
-            send_event_to_moderation_sync,
+        send_event_to_moderation_sync( 
             product_id=sku.product_id,
             seller_id=product.seller_id,
             idempotency_key=idempotency_key,
+            db=db,  # ← добавили db
             event_type="PRODUCT_EDITED",
             json_before=json_before,
             json_after=json_after,
             category_id=product.category_id
         )
-    
-    # 10. Формируем ответ (без изменений)
+    # 9. Формируем ответ (без изменений)
     return SKUSchema(
         id=db_sku.id,
         product_id=db_sku.product_id,
@@ -245,7 +224,6 @@ def create_sku(
 def update_sku(
     sku_id: UUID,
     sku_update: SKUUpdateWithValidation,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_seller: Seller = Depends(get_current_seller)
 ):
@@ -335,11 +313,11 @@ def update_sku(
             "status": product.status  # новый статус
         }
         
-        background_tasks.add_task(
-            send_event_to_moderation_sync,
+        send_event_to_moderation_sync(
             product_id=product.id,
             seller_id=product.seller_id,
             idempotency_key=idempotency_key,
+            db=db,  # ← добавить
             event_type="PRODUCT_EDITED",
             json_before=json_before,
             json_after=json_after,

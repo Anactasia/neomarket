@@ -44,7 +44,7 @@ class SKUCreateWithValidation(SKUCreate):
         if v < 0:
             raise ValueError('price must be >= 0 (kopecks)')
         return v
-
+    
     @field_validator('cost_price')
     @classmethod
     def validate_cost_price(cls, v: Optional[int]) -> Optional[int]:
@@ -57,13 +57,6 @@ class SKUCreateWithValidation(SKUCreate):
     def validate_discount(cls, v: int) -> int:
         if v < 0:
             raise ValueError('discount must be >= 0')
-        return v
-
-    @field_validator('images')
-    @classmethod
-    def validate_images(cls, v: List[SKUImageCreate]) -> List[SKUImageCreate]:  # ← ИЗМЕНЕНО
-        if not v or len(v) == 0:
-            raise ValueError('images is required (at least one image)')
         return v
 
 
@@ -111,13 +104,6 @@ class SKUUpdateWithValidation(SKUUpdate):
             raise ValueError('discount must be >= 0')
         return v
 
-    # Валидатор для images при обновлении
-    @field_validator('images', check_fields=False)
-    @classmethod
-    def validate_images(cls, v: Optional[List[SKUImageCreate]]) -> Optional[List[SKUImageCreate]]:
-        if v is not None and len(v) == 0:
-            raise ValueError('images must not be empty')
-        return v
 
 
 # ----- FOR RESPONSE -----
