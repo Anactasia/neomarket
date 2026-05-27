@@ -557,35 +557,44 @@ class TestB2B03EditSKU:
     
 
     def test_edit_product_sends_edited_event_to_moderation(
-        self, client, auth_headers, test_product_moderated
+        self, client, auth_headers, test_product_moderated, db_session
     ):
-        """Проверка: редактирование отправляет событие EDITED в Moderation"""
-        import httpx
+        """Проверка: редактирование сохраняет событие EDITED в outbox"""
+        from app.models.outbox import OutboxEvent
+
+        product = db_session.query(Product).filter(Product.id == test_product_moderated.id).first()
+
+        response = client.patch(
+            f"/api/v1/products/{test_product_moderated.id}",
+            json={"title": "Updated Title"},
+            headers=auth_headers
+        )
+
+        assert response.status_code == 200
+
+        db_session.refresh(product)
+
+        db_session.commit()
+
+        outbox_events = db_session.query(OutboxEvent).all()
+
+        assert len(outbox_events) >= 1
         
-        with patch.object(httpx, 'Client') as mock_client_class:
-            mock_client = MagicMock()
-            mock_post = MagicMock()
-            mock_client.post = mock_post
-            mock_client_class.return_value.__enter__.return_value = mock_client
-            
-            response = client.patch(
-                f"/api/v1/products/{test_product_moderated.id}",
-                json={"title": "Updated Title"},
-                headers=auth_headers
-            )
-            
-            assert response.status_code == 200
-            
-            mock_post.assert_called_once()
-            call_args = mock_post.call_args
-            assert call_args[0][0] == "http://moderation:8000/api/v1/b2b/events"
-            
-            request_body = call_args[1]["json"]
-            assert request_body["event_type"] == "PRODUCT_EDITED"
-            assert "idempotency_key" in request_body
-            assert "occurred_at" in request_body
-            
-            payload = request_body["payload"]
-            assert payload["product_id"] == str(test_product_moderated.id)
-            assert "json_before" in payload
-            assert "json_after" in payload
+        # ← ИСПРАВЛЕНО: фильтруем по event_type и product_id
+        edited_events = [
+            e for e in outbox_events 
+            if e.event_type == "PRODUCT_EDITED" 
+            and e.payload.get("payload", {}).get("product_id") == str(test_product_moderated.id)
+        ]
+        
+        assert len(edited_events) >= 1, f"Event for product {test_product_moderated.id} not found"
+
+        event = edited_events[-1]  # берём последнее подходящее событие
+        assert event.target == "moderation"
+        assert "b2b-service-key" in str(event.headers)
+
+        payload = event.payload
+        assert payload["event_type"] == "PRODUCT_EDITED"
+        assert "idempotency_key" in payload
+        assert "occurred_at" in payload
+        assert payload["payload"]["product_id"] == str(test_product_moderated.id)

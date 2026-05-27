@@ -19,6 +19,7 @@ class ReserveItem(BaseModel):
 class ReserveRequest(BaseModel):
     """Запрос на резервирование от B2C"""
     idempotency_key: UUID = Field(..., description="Идемпотентность ключ (TTL 1 час)")
+    order_id: UUID = Field(...)
     items: List[ReserveItem] = Field(..., min_length=1, description="Список SKU для резервирования")
 
 

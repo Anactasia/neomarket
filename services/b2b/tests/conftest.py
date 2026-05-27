@@ -150,7 +150,8 @@ def test_sku(db_session, test_product):
         product_id=test_product.id,
         name="Test SKU",
         price=10000,
-        quantity=100,
+        stock_quantity=100,    
+        active_quantity=100,   
         reserved_quantity=0
     )
     db_session.add(sku)

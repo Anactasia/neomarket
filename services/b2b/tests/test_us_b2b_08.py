@@ -67,7 +67,7 @@ def test_seller(db_session):
         first_name="Test",
         last_name="Seller",
         company_name="Test Company",
-        inn=unique_suffix[:12]  # ← уникальный INN
+        inn=unique_suffix[:12]
     )
     db_session.add(seller)
     db_session.commit()
@@ -114,10 +114,12 @@ class TestB2B08ReserveUnreserve:
         
         # Резервируем 3 штуки
         idempotency_key = uuid4()
+        order_id = uuid4()
         response = client.post(
             "/api/v1/inventory/reserve",
             json={
                 "idempotency_key": str(idempotency_key),
+                "order_id": str(order_id),
                 "items": [
                     {"sku_id": str(sku.id), "quantity": 3}
                 ]
@@ -205,10 +207,12 @@ class TestB2B08ReserveUnreserve:
         
         # Пытаемся зарезервировать: SKU 1 (нужно 3) OK, SKU 2 (нужно 5, есть 2) FAIL
         idempotency_key = uuid4()
+        order_id = uuid4()
         response = client.post(
             "/api/v1/inventory/reserve",
             json={
                 "idempotency_key": str(idempotency_key),
+                "order_id": str(order_id),
                 "items": [
                     {"sku_id": str(sku1.id), "quantity": 3},
                     {"sku_id": str(sku2.id), "quantity": 5}
@@ -270,12 +274,14 @@ class TestB2B08ReserveUnreserve:
         db_session.commit()
         
         idempotency_key = uuid4()
+        order_id = uuid4()
         
         # Первый запрос
         response1 = client.post(
             "/api/v1/inventory/reserve",
             json={
                 "idempotency_key": str(idempotency_key),
+                "order_id": str(order_id),
                 "items": [
                     {"sku_id": str(sku.id), "quantity": 3}
                 ]
@@ -292,6 +298,7 @@ class TestB2B08ReserveUnreserve:
             "/api/v1/inventory/reserve",
             json={
                 "idempotency_key": str(idempotency_key),
+                "order_id": str(order_id),
                 "items": [
                     {"sku_id": str(sku.id), "quantity": 3}
                 ]
@@ -346,10 +353,12 @@ class TestB2B08ReserveUnreserve:
         
         # Резервируем все 3 штуки
         idempotency_key = uuid4()
+        order_id = uuid4()
         response = client.post(
             "/api/v1/inventory/reserve",
             json={
                 "idempotency_key": str(idempotency_key),
+                "order_id": str(order_id),
                 "items": [
                     {"sku_id": str(sku.id), "quantity": 3}
                 ]
@@ -400,10 +409,12 @@ class TestB2B08ReserveUnreserve:
         
         # Сначала резервируем
         idempotency_key = uuid4()
+        order_id = uuid4()
         reserve_response = client.post(
             "/api/v1/inventory/reserve",
             json={
                 "idempotency_key": str(idempotency_key),
+                "order_id": str(order_id),
                 "items": [
                     {"sku_id": str(sku.id), "quantity": 5}
                 ]
@@ -418,11 +429,11 @@ class TestB2B08ReserveUnreserve:
         assert sku.reserved_quantity == 5
         
         # Затем снимаем резерв
-        order_id = uuid4()
+        unreserve_order_id = uuid4()
         unreserve_response = client.post(
             "/api/v1/inventory/unreserve",
             json={
-                "order_id": str(order_id),
+                "order_id": str(unreserve_order_id),
                 "items": [
                     {"sku_id": str(sku.id), "quantity": 3}
                 ]
@@ -448,6 +459,7 @@ class TestB2B08ReserveUnreserve:
             "/api/v1/inventory/reserve",
             json={
                 "idempotency_key": str(uuid4()),
+                "order_id": str(uuid4()),
                 "items": [
                     {"sku_id": str(uuid4()), "quantity": 1}
                 ]
@@ -480,6 +492,7 @@ class TestB2B08ReserveUnreserve:
             "/api/v1/inventory/reserve",
             json={
                 "idempotency_key": str(uuid4()),
+                "order_id": str(uuid4()),
                 "items": [
                     {"sku_id": str(uuid4()), "quantity": 1}
                 ]
@@ -508,6 +521,7 @@ class TestB2B08ReserveUnreserve:
             "/api/v1/inventory/reserve",
             json={
                 "idempotency_key": str(uuid4()),
+                "order_id": str(uuid4()),
                 "items": [
                     {"sku_id": str(uuid4()), "quantity": 0}
                 ]
@@ -523,6 +537,7 @@ class TestB2B08ReserveUnreserve:
             "/api/v1/inventory/reserve",
             json={
                 "idempotency_key": str(uuid4()),
+                "order_id": str(uuid4()),
                 "items": [
                     {"sku_id": str(uuid4()), "quantity": -5}
                 ]

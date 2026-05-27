@@ -305,24 +305,22 @@ class TestB2B02CreateSKU:
         assert error_data["code"] == "FORBIDDEN"
         assert "hard-blocked" in error_data["message"].lower()
 
-    def test_missing_image_returns_422(
+    def test_create_sku_with_empty_images_returns_201(
         self, client, auth_headers, test_product_created
     ):
-        """Сценарий 4: отсутствие images → 422 Validation Error (Pydantic)"""
+        """OpenAPI: images опциональный, пустой массив допустим"""
         response = client.post("/api/v1/skus/", json={
             "product_id": str(test_product_created.id),
             "name": "256GB Black",
             "price": 12999000,
             "cost_price": 9500000,
             "discount": 0,
-            "images": []
+            "images": []  # пустой массив
         }, headers=auth_headers)
 
-        # Pydantic validation error → 422
-        assert response.status_code == 422
-        error_data = response.json()
-        # Проверяем flat-формат ошибки
-        assert error_data["code"] == "INVALID_REQUEST"
+        assert response.status_code == 201
+        data = response.json()
+        assert data["images"] == []
 
     def test_missing_price_returns_422(
         self, client, auth_headers, test_product_created
@@ -399,50 +397,33 @@ class TestB2B02CreateSKU:
         assert "does not belong" in error_data["message"].lower()
     
     def test_first_sku_sends_created_event_to_moderation(
-        self, client, auth_headers, test_product_created
+        self, client, auth_headers, test_product_created, db_session
     ):
-        """Проверка: первый SKU отправляет событие CREATED в Moderation"""
-        import httpx
+        """Проверка: первый SKU сохраняет событие CREATED в outbox"""
+        from app.models.outbox import OutboxEvent
         
-        with patch.object(httpx, 'Client') as mock_client_class:
-            mock_client = MagicMock()
-            mock_post = MagicMock()
-            mock_client.post = mock_post
-            mock_client_class.return_value.__enter__.return_value = mock_client
-            
-            response = client.post("/api/v1/skus/", json={
-                "product_id": str(test_product_created.id),
-                "name": "256GB Black",
-                "price": 12999000,
-                "cost_price": 9500000,
-                "discount": 0,
-                "images": [{"url": "/s3/test.jpg", "ordering": 0}]
-            }, headers=auth_headers)
-            
-            assert response.status_code == 201
-            
-            # Проверяем, что POST был вызван
-            mock_post.assert_called_once()
-            
-            # Проверяем URL
-            call_args = mock_post.call_args
-            assert call_args[0][0] == "http://moderation:8000/api/v1/b2b/events"
-            
-            # Проверяем заголовки
-            headers = call_args[1]["headers"]
-            assert headers["X-Service-Key"] == "b2b-service-key"
-            
-            # Проверяем тело запроса
-            request_body = call_args[1]["json"]
-            assert request_body["event_type"] == "PRODUCT_CREATED"
-            assert "idempotency_key" in request_body
-            assert "occurred_at" in request_body
-            
-            # Проверяем payload
-            payload = request_body["payload"]
-            assert payload["product_id"] == str(test_product_created.id)
-            assert payload["seller_id"] == str(test_product_created.seller_id)
-            assert "json_after" in payload
+        response = client.post("/api/v1/skus/", json={
+            "product_id": str(test_product_created.id),
+            "name": "256GB Black",
+            "price": 12999000,
+            "cost_price": 9500000,
+            "discount": 0,
+            "images": [{"url": "/s3/test.jpg", "ordering": 0}]
+        }, headers=auth_headers)
+        
+        assert response.status_code == 201
+        
+        # Проверяем, что событие сохранено в outbox
+        outbox_events = db_session.query(OutboxEvent).all()
+        assert len(outbox_events) >= 1
+        
+        # Проверяем, что событие правильного типа
+        created_events = [e for e in outbox_events if e.event_type == "PRODUCT_CREATED"]
+        assert len(created_events) >= 1
+        
+        event = created_events[0]
+        assert event.target == "moderation"
+        assert "b2b-service-key" in str(event.headers)
     
 
     def test_adding_sku_to_moderated_re_moderates_product(

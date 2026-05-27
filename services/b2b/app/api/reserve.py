@@ -15,6 +15,7 @@ from uuid import UUID
 from typing import Optional
 import json
 import logging
+from app.services.outbox import save_to_outbox
 
 from app.database import get_db
 from app.models.sku import SKU
@@ -43,33 +44,32 @@ def verify_service_key(x_service_key: Optional[str] = None) -> bool:
     return x_service_key == expected_key
 
 
-def send_sku_out_of_stock_event(sku_id: UUID, product_id: UUID):
+
+def send_sku_out_of_stock_event(sku_id: UUID, product_id: UUID, db: Session):
     """
-    Отправляет событие SKU_OUT_OF_STOCK в B2C Service.
-    Соответствует neomarket-b2c.yaml.
+    Сохраняет событие SKU_OUT_OF_STOCK в outbox для отправки в B2C.
     """
-    import httpx
-    from app.config import settings
+    from datetime import datetime, timezone
+    import uuid as uuid_module
     
-    try:
-        with httpx.Client(timeout=5.0) as client:
-            event_payload = {
-                "event_type": "SKU_OUT_OF_STOCK",
-                "idempotency_key": str(UUID(int=hash(f"{sku_id}-{datetime.now(timezone.utc).timestamp()}") & ((1 << 128) - 1))),
-                "occurred_at": datetime.now(timezone.utc).isoformat(),
-                "payload": {
-                    "sku_id": str(sku_id),
-                    "product_id": str(product_id)
-                }
-            }
-            client.post(
-                "http://b2c:8000/api/v1/b2b/events",
-                json=event_payload,
-                headers={"X-Service-Key": "b2b-to-b2c-key"}
-            )
-            logger.info(f"SKU_OUT_OF_STOCK event sent for sku_id={sku_id}")
-    except Exception as e:
-        logger.warning(f"Failed to send SKU_OUT_OF_STOCK event: {e}. Event lost: sku_id={sku_id}")
+    event_payload = {
+        "event_type": "SKU_OUT_OF_STOCK",
+        "idempotency_key": str(uuid_module.uuid4()),
+        "occurred_at": datetime.now(timezone.utc).isoformat(),
+        "payload": {
+            "sku_id": str(sku_id),
+            "product_id": str(product_id)
+        }
+    }
+    
+    save_to_outbox(
+        db=db,
+        event_type="SKU_OUT_OF_STOCK",
+        target="b2c",
+        url="http://b2c:8000/api/v1/b2b/events",
+        payload=event_payload,
+        headers={"X-Service-Key": "b2b-to-b2c-key"}
+    )
 
 
 @router.post("/reserve")
@@ -206,7 +206,7 @@ def reserve_inventory(
     
     # 7. Отправляем события SKU_OUT_OF_STOCK (если нужно)
     for sku_id, product_id in sku_out_of_stock_trigger:
-        send_sku_out_of_stock_event(sku_id, product_id)
+        send_sku_out_of_stock_event(sku_id, product_id, db)
     
     return result
 
