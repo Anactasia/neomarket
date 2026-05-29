@@ -1,10 +1,16 @@
 """
 Тесты для US-B2B-07: Каталог товаров для B2C (service-to-service)
 """
+import os
 import pytest
 from uuid import uuid4
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
+
+# ✅ Устанавливаем переменные окружения ДО импорта приложения
+os.environ["B2C_TO_B2B_KEY"] = "test-b2c-key"
+os.environ["B2B_TO_MOD_KEY"] = "test-mod-key"
+os.environ["B2B_SERVICE_KEY"] = "b2b-service-key"
 
 from app.main import app
 from app.database import SessionLocal
@@ -50,7 +56,7 @@ def clean_db(db_session):
 @pytest.fixture
 def service_key():
     """X-Service-Key для межсервисных вызовов"""
-    return "b2b-service-key"
+    return "test-b2c-key"  # ✅ изменено с "b2b-service-key" на "test-b2c-key"
 
 
 @pytest.fixture

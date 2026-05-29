@@ -1,5 +1,5 @@
-# app/models/base.py
 import uuid
+from datetime import datetime, timezone
 from sqlalchemy import Column, DateTime, func, CHAR
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.dialects.postgresql import UUID
@@ -35,8 +35,14 @@ class GUID(TypeDecorator):
             return uuid.UUID(value)
         return value
 
+
+def now_utc():
+    """Возвращает текущее UTC время"""
+    return datetime.now(timezone.utc)
+
+
 class BaseModel(Base):
     __abstract__ = True
     
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    created_at = Column(DateTime(timezone=True), default=now_utc, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=now_utc, onupdate=now_utc, nullable=False)

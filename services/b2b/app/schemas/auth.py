@@ -7,23 +7,19 @@ from datetime import datetime
 class SellerRegister(BaseModel):
     """Регистрация продавца (адаптировано под вашу модель)"""
     email: EmailStr
-    password: str = Field(..., min_length=6, max_length=100)
+    password: str = Field(..., min_length=8, max_length=128)  
     first_name: str = Field(..., min_length=1, max_length=100)
     last_name: str = Field(..., min_length=1, max_length=100)
     middle_name: Optional[str] = Field(None, max_length=100)
     company_name: str = Field(..., min_length=1, max_length=255)
     inn: str = Field(..., min_length=10, max_length=12)
-    kpp: Optional[str] = Field(None, min_length=9, max_length=9)
-    ogrn: Optional[str] = Field(None, min_length=13, max_length=15)
-    legal_address: Optional[str] = None
-    actual_address: Optional[str] = None
     phone: Optional[str] = Field(None, pattern=r'^\+?[0-9]{10,15}$')
     
     @field_validator('password')
     @classmethod
     def validate_password(cls, v: str) -> str:
-        if len(v) < 6:
-            raise ValueError('password must be at least 6 characters')
+        if len(v) < 8:  # ← исправлено
+            raise ValueError('password must be at least 8 characters')
         return v
 
 
@@ -46,7 +42,7 @@ class RefreshRequest(BaseModel):
 
 
 class SellerResponse(BaseModel):
-    """Ответ с данными продавца"""
+    """Ответ с данными продавца (по спецификации)"""
     id: UUID
     email: str
     first_name: str
@@ -54,12 +50,9 @@ class SellerResponse(BaseModel):
     middle_name: Optional[str] = None
     company_name: str
     inn: str
-    kpp: Optional[str] = None
-    ogrn: Optional[str] = None
     phone: Optional[str] = None
-    status: str
-    rating: Optional[float] = None
     created_at: datetime
+    updated_at: datetime  # ← добавлено
     
     class Config:
         from_attributes = True

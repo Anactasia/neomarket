@@ -1,9 +1,9 @@
-# app/api/invoices.py
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from uuid import UUID
 from datetime import datetime, timezone
+from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.models.invoice import Invoice, InvoiceItem   
@@ -12,7 +12,8 @@ from app.schemas.invoice import (
     InvoiceResponse, 
     InvoiceAcceptRequest,
     InvoiceItemResponse,
-    InvoicePaginatedResponse
+    InvoicePaginatedResponse,
+    InvoiceStatus
 )
 from app.models.sku import SKU 
 from app.models.product import Product
@@ -34,13 +35,6 @@ def create_invoice(
 ):
     """
     Создать накладную на поступление товара.
-    
-    Валидация:
-    - items должен содержать минимум 1 позицию
-    - Все SKU должны существовать
-    - Все SKU должны принадлежать текущему продавцу (IDOR check)
-    - Все товары должны иметь статус MODERATED
-    - quantity должно быть > 0
     """
     # 1. Проверка на пустой список
     if not invoice.items or len(invoice.items) == 0:
@@ -48,6 +42,10 @@ def create_invoice(
     
     # 2. Получаем все SKU одним запросом
     sku_ids = [item.sku_id for item in invoice.items]
+    
+    if len(sku_ids) != len(set(sku_ids)):
+        error_response("INVALID_REQUEST", "Duplicate SKU IDs in items", 400)
+    
     db_skus = db.query(SKU).filter(SKU.id.in_(sku_ids)).all()
     sku_map = {sku.id: sku for sku in db_skus}
     
@@ -60,15 +58,12 @@ def create_invoice(
     for item in invoice.items:
         sku = sku_map[item.sku_id]
         
-        # Проверка quantity
         if item.quantity <= 0:
             error_response("INVALID_REQUEST", "quantity must be > 0", 400)
         
-        # Проверка ownership
         if sku.product.seller_id != current_seller.id:
             error_response("NOT_OWNER", "One or more SKUs do not belong to the authenticated seller", 403)
         
-        # Проверка статуса товара
         if sku.product.status != "MODERATED":
             error_response("INVALID_REQUEST", "Invoice can only be created for MODERATED products", 400)
     
@@ -102,6 +97,7 @@ def create_invoice(
         created_at=db_invoice.created_at,
         updated_at=db_invoice.updated_at,
         accepted_at=db_invoice.accepted_at,
+        accepted_by=None,
         items=[
             InvoiceItemResponse(
                 id=inv_item.id,
@@ -117,23 +113,21 @@ def create_invoice(
 def get_invoices(
     limit: int = 20,
     offset: int = 0,
+    status: Optional[InvoiceStatus] = None,
     db: Session = Depends(get_db),
     current_seller: Seller = Depends(get_current_seller)
 ):
-    """Получить список накладных текущего продавца с пагинацией"""
-    # Считаем общее количество
-    total_count = db.query(Invoice).filter(
-        Invoice.seller_id == current_seller.id
-    ).count()
+    """Получить список накладных текущего продавца с пагинацией и фильтром по статусу"""
+    query = db.query(Invoice).filter(Invoice.seller_id == current_seller.id)
     
-    # Получаем накладные с пагинацией
-    invoices = db.query(Invoice).filter(
-        Invoice.seller_id == current_seller.id
-    ).offset(offset).limit(limit).all()
+    if status:
+        query = query.filter(Invoice.status == status.value)
+    
+    total_count = query.count()
+    invoices = query.options(selectinload(Invoice.items)).offset(offset).limit(limit).all()
     
     result_items = []
     for inv in invoices:
-        items = db.query(InvoiceItem).filter(InvoiceItem.invoice_id == inv.id).all()
         result_items.append(InvoiceResponse(
             id=inv.id,
             seller_id=inv.seller_id,
@@ -141,13 +135,14 @@ def get_invoices(
             created_at=inv.created_at,
             updated_at=inv.updated_at,
             accepted_at=inv.accepted_at,
+            accepted_by=inv.accepted_by_id,
             items=[
                 InvoiceItemResponse(
                     id=item.id,
                     sku_id=item.sku_id,
                     quantity=item.quantity,
                     accepted_quantity=item.accepted_quantity
-                ) for item in items
+                ) for item in inv.items  
             ]
         ))
     
@@ -159,13 +154,13 @@ def get_invoices(
     )
 
 
-@router.get("/{invoice_id}", response_model=InvoiceResponse)
-def get_invoice(
+@router.delete("/{invoice_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_invoice(
     invoice_id: UUID,
     db: Session = Depends(get_db),
     current_seller: Seller = Depends(get_current_seller)
 ):
-    """Получить накладную по ID (только свои)"""
+    """Удалить накладную (только в статусе CREATED)"""
     invoice = db.query(Invoice).filter(
         Invoice.id == invoice_id,
         Invoice.seller_id == current_seller.id
@@ -177,7 +172,35 @@ def get_invoice(
             detail={"code": "NOT_FOUND", "message": "Invoice not found"}
         )
     
-    items = db.query(InvoiceItem).filter(InvoiceItem.invoice_id == invoice.id).all()
+    if invoice.status != "CREATED":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": "INVALID_STATE", "message": "Invoice can only be deleted in CREATED status"}
+        )
+    
+    db.delete(invoice)
+    db.commit()
+    return None
+
+
+@router.get("/{invoice_id}", response_model=InvoiceResponse)
+def get_invoice(
+    invoice_id: UUID,
+    db: Session = Depends(get_db),
+    current_seller: Seller = Depends(get_current_seller)
+):
+    """Получить накладную по ID (только свои)"""
+    invoice = db.query(Invoice).options(selectinload(Invoice.items)).filter(
+        Invoice.id == invoice_id,
+        Invoice.seller_id == current_seller.id
+    ).first()
+    
+    if not invoice:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "NOT_FOUND", "message": "Invoice not found"}
+        )
+    
     return InvoiceResponse(
         id=invoice.id,
         seller_id=invoice.seller_id,
@@ -185,13 +208,14 @@ def get_invoice(
         created_at=invoice.created_at,
         updated_at=invoice.updated_at,
         accepted_at=invoice.accepted_at,
+        accepted_by=invoice.accepted_by_id,
         items=[
             InvoiceItemResponse(
                 id=item.id,
                 sku_id=item.sku_id,
                 quantity=item.quantity,
                 accepted_quantity=item.accepted_quantity
-            ) for item in items
+            ) for item in invoice.items 
         ]
     )
 
@@ -203,52 +227,38 @@ def accept_invoice(
     db: Session = Depends(get_db),
     current_seller: Seller = Depends(get_current_seller)
 ):
-    """
-    Приёмка накладной (вызывается через Django Admin).
-    
-    Логика:
-    - Если accepted_items не передан — принимается полностью (accepted_quantity = quantity для всех)
-    - Если передан — для каждой позиции обновляем accepted_quantity
-    - Увеличиваем active_quantity SKU на accepted_quantity
-    - Определяем статус накладной:
-      * Все accepted_quantity == quantity → ACCEPTED
-      * Хотя бы один > 0, но не все полностью → PARTIALLY_ACCEPTED
-      * Все accepted_quantity == 0 → REJECTED
-    """
-    # 1. Проверяем существование накладной
-    invoice = db.query(Invoice).filter(Invoice.id == invoice_id).first()
+    # 1. Загружаем накладную с items (selectinload) + проверка владельца
+    invoice = db.query(Invoice).options(selectinload(Invoice.items)).filter(
+        Invoice.id == invoice_id,
+        Invoice.seller_id == current_seller.id
+    ).first()
     if not invoice:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": "NOT_FOUND", "message": "Invoice not found"}
-        )
+        raise HTTPException(404, detail={"code": "NOT_FOUND", "message": "Invoice not found"})
     
-    # 2. Проверяем, что накладная ещё не принята
-    if invoice.status in ["ACCEPTED", "CANCELLED"]:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={"code": "INVALID_STATE", "message": "Invoice cannot be accepted in current state"}
-        )
+    # 2. Проверка статуса
+    if invoice.status in ["ACCEPTED", "PARTIALLY_ACCEPTED", "CANCELLED"]:
+        raise HTTPException(409, detail={"code": "INVALID_STATE", "message": "Invoice cannot be accepted"})
     
-    # 3. Получаем позиции накладной
-    invoice_items = {item.id: item for item in invoice.items}
+    # 3. Загружаем все SKU одним запросом (решаем N+1)
+    all_sku_ids = [item.sku_id for item in invoice.items]
+    skus = {sku.id: sku for sku in db.query(SKU).filter(SKU.id.in_(all_sku_ids)).all()}
     
-    # 4. Если accepted_items не передан — принимаем полностью
+    # 4. Полная приёмка
     if accept_request is None or not accept_request.accepted_items:
         for inv_item in invoice.items:
             inv_item.accepted_quantity = inv_item.quantity
-            sku = db.query(SKU).filter(SKU.id == inv_item.sku_id).first()
+            sku = skus.get(inv_item.sku_id)
             if sku:
                 sku.active_quantity += inv_item.quantity
         
         invoice.status = "ACCEPTED"
         invoice.accepted_at = datetime.now(timezone.utc)
+        invoice.accepted_by_id = current_seller.id
         invoice.updated_at = datetime.now(timezone.utc)
         
         db.commit()
         db.refresh(invoice)
         
-        db_items = db.query(InvoiceItem).filter(InvoiceItem.invoice_id == invoice.id).all()
         return InvoiceResponse(
             id=invoice.id,
             seller_id=invoice.seller_id,
@@ -256,70 +266,55 @@ def accept_invoice(
             created_at=invoice.created_at,
             updated_at=invoice.updated_at,
             accepted_at=invoice.accepted_at,
+            accepted_by=invoice.accepted_by_id,
             items=[
                 InvoiceItemResponse(
                     id=item.id,
                     sku_id=item.sku_id,
                     quantity=item.quantity,
                     accepted_quantity=item.accepted_quantity
-                ) for item in db_items
+                ) for item in invoice.items
             ]
         )
     
-    # 5. Валидируем и обрабатываем приёмку с accepted_items
+    # 5. Частичная приёмка
     total_accepted = 0
     total_quantity = 0
+    invoice_items = {item.id: item for item in invoice.items}
     
     for accept_item in accept_request.accepted_items:
         if accept_item.invoice_item_id not in invoice_items:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"code": "INVALID_REQUEST", "message": f"Invoice item {accept_item.invoice_item_id} not found"}
-            )
+            raise HTTPException(400, detail={"code": "INVALID_REQUEST", "message": f"Invoice item {accept_item.invoice_item_id} not found"})
         
         inv_item = invoice_items[accept_item.invoice_item_id]
         
-        # Валидация accepted_quantity
-        if accept_item.accepted_quantity < 0:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"code": "INVALID_REQUEST", "message": "accepted_quantity must be >= 0"}
-            )
+        if accept_item.accepted_quantity < 0 or accept_item.accepted_quantity > inv_item.quantity:
+            raise HTTPException(400, detail={"code": "INVALID_REQUEST", "message": f"Invalid accepted_quantity for {inv_item.id}"})
         
-        if accept_item.accepted_quantity > inv_item.quantity:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"code": "INVALID_REQUEST", "message": f"accepted_quantity cannot exceed quantity for invoice item {inv_item.id}"}
-            )
-        
-        # Обновляем accepted_quantity
         inv_item.accepted_quantity = accept_item.accepted_quantity
         
-        # Увеличиваем active_quantity SKU
-        sku = db.query(SKU).filter(SKU.id == inv_item.sku_id).first()
+        sku = skus.get(inv_item.sku_id)
         if sku:
             sku.active_quantity += accept_item.accepted_quantity
         
-        # Считаем для определения статуса
         total_accepted += accept_item.accepted_quantity
         total_quantity += inv_item.quantity
     
-    # 6. Определяем статус накладной
+    # 6. Определяем статус
     if total_accepted == total_quantity:
         invoice.status = "ACCEPTED"
+        invoice.accepted_at = datetime.now(timezone.utc)
+        invoice.accepted_by_id = current_seller.id  
     elif total_accepted > 0:
         invoice.status = "PARTIALLY_ACCEPTED"
+        # accepted_at НЕ обновляем
     else:
-        invoice.status = "REJECTED"
+        raise HTTPException(400, detail={"code": "INVALID_REQUEST", "message": "At least one item must be accepted"})
     
-    invoice.accepted_at = datetime.now(timezone.utc)
     invoice.updated_at = datetime.now(timezone.utc)
-    
     db.commit()
     db.refresh(invoice)
     
-    # 7. Формируем ответ
-    db_items = db.query(InvoiceItem).filter(InvoiceItem.invoice_id == invoice.id).all()
     return InvoiceResponse(
         id=invoice.id,
         seller_id=invoice.seller_id,
@@ -327,12 +322,13 @@ def accept_invoice(
         created_at=invoice.created_at,
         updated_at=invoice.updated_at,
         accepted_at=invoice.accepted_at,
+        accepted_by=invoice.accepted_by_id,
         items=[
             InvoiceItemResponse(
                 id=item.id,
                 sku_id=item.sku_id,
                 quantity=item.quantity,
                 accepted_quantity=item.accepted_quantity
-            ) for item in db_items
+            ) for item in invoice.items
         ]
     )

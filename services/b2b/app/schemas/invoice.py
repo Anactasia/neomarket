@@ -3,6 +3,14 @@ from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime
 from uuid import UUID
+from enum import Enum
+
+
+class InvoiceStatus(str, Enum):
+    CREATED = "CREATED"
+    PARTIALLY_ACCEPTED = "PARTIALLY_ACCEPTED"
+    ACCEPTED = "ACCEPTED"
+    CANCELLED = "CANCELLED"
 
 class InvoiceItemCreate(BaseModel):
     """Позиция накладной при создании"""
@@ -31,6 +39,7 @@ class InvoiceResponse(BaseModel):
     created_at: datetime
     updated_at: Optional[datetime] = None
     accepted_at: Optional[datetime] = None
+    accepted_by: Optional[UUID] = None  # Оператор-админ, принявший накладную (по спецификации OpenAPI)
     items: List[InvoiceItemResponse] = []
     
     class Config:

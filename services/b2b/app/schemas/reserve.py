@@ -1,5 +1,3 @@
-# app/schemas/reserve.py
-
 """
 Схемы для резервирования товаров (B2C → B2B)
 Соответствует neomarket-b2b.yaml
@@ -7,6 +5,7 @@
 from pydantic import BaseModel, Field
 from typing import List, Optional
 from uuid import UUID
+from datetime import datetime, timezone
 
 
 # ─── Reserve (POST /api/v1/inventory/reserve) ───
@@ -31,9 +30,10 @@ class ReservedItemResponse(BaseModel):
 
 
 class ReserveSuccessResponse(BaseModel):
-    """Ответ на успешное резервирование (200)"""
-    reserved: bool = True
-    items: List[ReservedItemResponse]
+    """Ответ на успешное резервирование (200) - по спецификации"""
+    order_id: UUID
+    status: str = "RESERVED"
+    reserved_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class FailedReserveItem(BaseModel):
@@ -45,9 +45,10 @@ class FailedReserveItem(BaseModel):
 
 
 class ReserveErrorResponse(BaseModel):
-    """Ответ при неудачном резервировании (409)"""
-    reserved: bool = False
-    failed_items: List[FailedReserveItem]
+    """Ответ при неудачном резервировании (409) - по спецификации"""
+    code: str = "INSUFFICIENT_STOCK"
+    message: str = "Some items are out of stock or have insufficient quantity"
+    details: dict = Field(default_factory=dict)
 
 
 # ─── Unreserve (POST /api/v1/inventory/unreserve) ───
@@ -64,5 +65,25 @@ class UnreserveRequest(BaseModel):
 
 
 class UnreserveSuccessResponse(BaseModel):
-    """Ответ на успешное снятие резерва (200)"""
-    ok: bool = True
+    """Ответ на успешное снятие резерва (200) - по спецификации InventoryOrderResponse"""
+    order_id: UUID
+    status: str = "UNRESERVED"
+    processed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+# ─── Fulfill (POST /api/v1/inventory/fulfill) ───
+
+class InventoryOrderRequest(BaseModel):
+    """Запрос на снятие резерва или списание (fulfill)"""
+    order_id: UUID = Field(..., description="ID заказа в B2C (для идемпотентности)")
+    items: List[UnreserveItem] = Field(..., min_length=1, description="Список SKU для обработки")
+
+
+class InventoryOrderResponse(BaseModel):
+    """Ответ на успешное снятие резерва или списание (200)"""
+    order_id: UUID
+    status: str = Field(..., pattern=r"^(UNRESERVED|FULFILLED)$")
+    processed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    
+    class Config:
+        from_attributes = True

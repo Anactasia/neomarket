@@ -1,19 +1,13 @@
-# app/api/reserve.py
-
 """
 Endpoints для резервирования и снятия резерва SKU (B2C → B2B)
 Соответствует neomarket-b2b.yaml: POST /api/v1/inventory/reserve и POST /api/v1/inventory/unreserve
-
-All-or-nothing резервирование с SELECT FOR UPDATE для конкурентной безопасности.
-Идемпотентность по idempotency_key (TTL 1 час).
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Header
 from sqlalchemy.orm import Session
-from sqlalchemy import select, func
+from sqlalchemy import select
 from datetime import datetime, timezone, timedelta
 from uuid import UUID
 from typing import Optional
-import json
 import logging
 from app.services.outbox import save_to_outbox
 
@@ -21,13 +15,13 @@ from app.database import get_db
 from app.models.sku import SKU
 from app.schemas.reserve import (
     ReserveRequest,
-    ReserveSuccessResponse,
     ReservedItemResponse,
-    ReserveErrorResponse,
-    FailedReserveItem,
     UnreserveRequest,
-    UnreserveSuccessResponse
+    UnreserveSuccessResponse,
+    InventoryOrderRequest,
+    InventoryOrderResponse
 )
+from app.dependencies.service_keys import verify_b2c_service_key
 
 router = APIRouter()
 
@@ -37,19 +31,8 @@ logger = logging.getLogger(__name__)
 _idempotency_cache: dict[UUID, dict] = {}
 
 
-def verify_service_key(x_service_key: Optional[str] = None) -> bool:
-    """Проверяет валидность X-Service-Key для межсервисных вызовов"""
-    import os
-    expected_key = os.getenv("B2B_SERVICE_KEY", "b2b-service-key")
-    return x_service_key == expected_key
-
-
-
 def send_sku_out_of_stock_event(sku_id: UUID, product_id: UUID, db: Session):
-    """
-    Сохраняет событие SKU_OUT_OF_STOCK в outbox для отправки в B2C.
-    """
-    from datetime import datetime, timezone
+    """Сохраняет событие SKU_OUT_OF_STOCK в outbox для отправки в B2C."""
     import uuid as uuid_module
     
     event_payload = {
@@ -78,104 +61,59 @@ def reserve_inventory(
     x_service_key: Optional[str] = Header(None, alias="X-Service-Key"),
     db: Session = Depends(get_db)
 ):
-    """
-    All-or-nothing резервирование SKU (вызывается B2C при checkout).
+    """All-or-nothing резервирование SKU (вызывается B2C при checkout)."""
     
-    Соответствует neomarket-b2b.yaml:
-    - URL: POST /api/v1/inventory/reserve
-    - Авторизация: X-Service-Key
-    - Идемпотентность: по idempotency_key (TTL 1 час)
-    - All-or-nothing: если хотя бы один SKU не может быть зарезервирован, вся операция отклоняется
-    
-    Алгоритм:
-    1. Проверка идемпотентности (если ключ уже использован → вернуть кэшированный результат)
-    2. SELECT FOR UPDATE по всем sku_id
-    3. Проверка active_quantity >= quantity для каждого SKU
-    4. Если все OK → UPDATE skus SET active_quantity -= N, reserved_quantity += N
-    5. Сохранить результат в кэш идемпотентности
-    6. Если active_quantity стал 0 → отправить событие SKU_OUT_OF_STOCK в B2C
-    7. Если не хватает остатков → ROLLBACK и вернуть 409
-    
-    Инвариант: active_quantity + reserved_quantity = stock_quantity (on_hand)
-    """
     # Проверка X-Service-Key
-    if x_service_key is None or not verify_service_key(x_service_key):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"code": "UNAUTHORIZED", "message": "X-Service-Key is required"}
-        )
+    if x_service_key is None or not verify_b2c_service_key(x_service_key):
+        raise HTTPException(401, detail={"code": "UNAUTHORIZED", "message": "X-Service-Key is required"})
     
     # 1. Проверка идемпотентности
     if request.idempotency_key in _idempotency_cache:
         cached = _idempotency_cache[request.idempotency_key]
-        # Проверка TTL (1 час)
         if datetime.now(timezone.utc) < cached["expires_at"]:
             logger.info(f"Idempotent repeat: idempotency_key={request.idempotency_key}")
             return cached["result"]
         else:
-            # TTL истёк, удаляем из кэша
             del _idempotency_cache[request.idempotency_key]
     
-    # 2. Получаем список SKU с блокировкой SELECT FOR UPDATE
-    sku_ids = [item.sku_id for item in request.items]
-    
-    # Проверяем, что все SKU существуют и получаем их
+    # 2. SELECT FOR UPDATE с ORDER BY
+    sku_ids = sorted([item.sku_id for item in request.items])
     skus = db.execute(
-        select(SKU).where(SKU.id.in_(sku_ids)).with_for_update()
+        select(SKU).where(SKU.id.in_(sku_ids)).order_by(SKU.id).with_for_update()
     ).scalars().all()
     
     if len(skus) != len(sku_ids):
         missing_ids = set(sku_ids) - {sku.id for sku in skus}
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"code": "INVALID_REQUEST", "message": f"SKU not found: {missing_ids}"}
-        )
+        raise HTTPException(400, detail={"code": "INVALID_REQUEST", "message": f"SKU not found: {missing_ids}"})
     
-    # Создаём словарь sku_id → SKU для быстрого доступа
     sku_map = {sku.id: sku for sku in skus}
     
-    # 3. Проверяем доступность каждого SKU
+    # 3. Проверяем доступность
     failed_items = []
     for item in request.items:
         sku = sku_map[item.sku_id]
         available = sku.active_quantity
         
         if available == 0:
-            failed_items.append({
-                "sku_id": str(item.sku_id),
-                "requested": item.quantity,
-                "available": 0,
-                "reason": "OUT_OF_STOCK"
-            })
+            failed_items.append({"sku_id": str(item.sku_id), "requested": item.quantity, "available": 0, "reason": "OUT_OF_STOCK"})
         elif available < item.quantity:
-            failed_items.append({
-                "sku_id": str(item.sku_id),
-                "requested": item.quantity,
-                "available": available,
-                "reason": "INSUFFICIENT_STOCK"
-            })
+            failed_items.append({"sku_id": str(item.sku_id), "requested": item.quantity, "available": available, "reason": "INSUFFICIENT_STOCK"})
     
-    # Если есть проблемы с каким-либо SKU → all-or-nothing отмена
     if failed_items:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "reserved": False,
-                "failed_items": failed_items
-            }
-        )
+        raise HTTPException(409, detail={
+            "code": "INSUFFICIENT_STOCK",
+            "message": "Some items are out of stock or have insufficient quantity",
+            "details": {"failed_items": failed_items}
+        })
     
-    # 4. Выполняем резервирование (UPDATE)
+    # 4. Выполняем резервирование
     reserved_items = []
     sku_out_of_stock_trigger = []
     
     for item in request.items:
         sku = sku_map[item.sku_id]
-        
-        # Обновляем количества
         sku.active_quantity -= item.quantity
         sku.reserved_quantity += item.quantity
-        
         remaining_stock = sku.active_quantity
         
         reserved_items.append(ReservedItemResponse(
@@ -184,31 +122,107 @@ def reserve_inventory(
             remaining_stock=remaining_stock
         ))
         
-        # Запоминаем, если active_quantity стал 0
         if remaining_stock == 0:
             sku_out_of_stock_trigger.append((sku.id, sku.product_id))
     
-            sku_out_of_stock_trigger.append((str(sku.id), str(sku.product_id)))
-    
-    # 5. Сохраняем изменения
     db.commit()
     
-    # 6. Сохраняем результат в кэш идемпотентности (TTL 1 час)
-    result = ReserveSuccessResponse(
-        reserved=True,
-        items=reserved_items
-    ).model_dump()
+    result = {
+        "order_id": str(request.order_id),
+        "status": "RESERVED",
+        "reserved_at": datetime.now(timezone.utc).isoformat()
+    }
     
     _idempotency_cache[request.idempotency_key] = {
         "result": result,
         "expires_at": datetime.now(timezone.utc) + timedelta(hours=1)
     }
     
-    # 7. Отправляем события SKU_OUT_OF_STOCK (если нужно)
     for sku_id, product_id in sku_out_of_stock_trigger:
         send_sku_out_of_stock_event(sku_id, product_id, db)
     
     return result
+
+
+@router.post("/fulfill")
+def fulfill_inventory(
+    request: InventoryOrderRequest,
+    x_service_key: Optional[str] = Header(None, alias="X-Service-Key"),
+    db: Session = Depends(get_db)
+):
+    """Списание резерва при доставке (вызывается B2C admin). Идемпотентно по order_id."""
+    
+    if x_service_key is None or not verify_b2c_service_key(x_service_key):
+        raise HTTPException(401, detail={"code": "UNAUTHORIZED", "message": "X-Service-Key is required"})
+    
+    from app.models.fulfill_operation import FulfillOperation
+    
+    # Идемпотентность по order_id
+    existing = db.query(FulfillOperation).filter(
+        FulfillOperation.order_id == request.order_id
+    ).first()
+    
+    if existing:
+        logger.info(f"Idempotent fulfill repeat: order_id={request.order_id}")
+        return InventoryOrderResponse(
+            order_id=request.order_id,
+            status="FULFILLED",
+            processed_at=existing.processed_at
+        ).model_dump()
+    
+    sku_ids = sorted([item.sku_id for item in request.items])
+    skus = db.execute(
+        select(SKU).where(SKU.id.in_(sku_ids)).order_by(SKU.id).with_for_update()
+    ).scalars().all()
+    
+    if len(skus) != len(sku_ids):
+        missing_ids = set(sku_ids) - {sku.id for sku in skus}
+        raise HTTPException(400, detail={"code": "INVALID_REQUEST", "message": f"SKU not found: {missing_ids}"})
+    
+    sku_map = {sku.id: sku for sku in skus}
+    
+    for item in request.items:
+            sku = sku_map[item.sku_id]
+            if item.quantity > sku.reserved_quantity:
+                raise HTTPException(409, detail={
+                    "code": "INSUFFICIENT_RESERVED",
+                    "message": f"Cannot fulfill {item.quantity}, only {sku.reserved_quantity} is reserved",
+                    "details": {"sku_id": str(sku.id), "requested": item.quantity, "available": sku.reserved_quantity}
+                })
+
+    
+    for item in request.items:
+        sku = sku_map[item.sku_id]
+        
+        sku.reserved_quantity -= item.quantity
+        sku.stock_quantity -= item.quantity
+        
+        if sku.reserved_quantity < 0:
+            sku.reserved_quantity = 0
+            logger.warning(f"reserved_quantity became negative for sku_id={sku.id}, corrected to 0")
+    
+        if sku.stock_quantity < 0:
+            sku.stock_quantity = 0
+            logger.warning(f"stock_quantity became negative for sku_id={sku.id}, corrected to 0")
+        
+        sku.active_quantity = sku.stock_quantity - sku.reserved_quantity
+        if sku.active_quantity < 0:
+            sku.active_quantity = 0
+    
+    # Сохраняем операцию для идемпотентности
+    fulfill_op = FulfillOperation(
+        order_id=request.order_id,
+        processed_at=datetime.now(timezone.utc)
+    )
+    db.add(fulfill_op)
+    
+    db.commit()
+    
+    return InventoryOrderResponse(
+        order_id=request.order_id,
+        status="FULFILLED",
+        processed_at=datetime.now(timezone.utc)
+    ).model_dump()
 
 
 @router.post("/unreserve")
@@ -217,59 +231,60 @@ def unreserve_inventory(
     x_service_key: Optional[str] = Header(None, alias="X-Service-Key"),
     db: Session = Depends(get_db)
 ):
-    """
-    Снятие резерва (при отмене заказа).
+    """Снятие резерва (при отмене заказа). Идемпотентно по order_id."""
     
-    Соответствует neomarket-b2b.yaml:
-    - URL: POST /api/v1/inventory/unreserve
-    - Авторизация: X-Service-Key
-    - Идемпотентность: по order_id
+    if x_service_key is None or not verify_b2c_service_key(x_service_key):
+        raise HTTPException(401, detail={"code": "UNAUTHORIZED", "message": "X-Service-Key is required"})
     
-    Алгоритм:
-    1. SELECT FOR UPDATE по всем sku_id
-    2. UPDATE skus SET active_quantity += N, reserved_quantity -= N
-    3. Сохранить результат (для идемпотентности)
-    
-    Инвариант: active_quantity + reserved_quantity = stock_quantity (on_hand)
-    """
-    # Проверка X-Service-Key
-    if x_service_key is None or not verify_service_key(x_service_key):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail={"code": "UNAUTHORIZED", "message": "X-Service-Key is required"}
-        )
-    
-    # Получаем список SKU с блокировкой SELECT FOR UPDATE
-    sku_ids = [item.sku_id for item in request.items]
-    
+    from app.models.unreserve_operation import UnreserveOperation
+        
+    existing = db.query(UnreserveOperation).filter(
+        UnreserveOperation.order_id == request.order_id
+    ).first()
+        
+    if existing:
+        logger.info(f"Idempotent unreserve repeat: order_id={request.order_id}")
+        return UnreserveSuccessResponse(
+            order_id=request.order_id,
+            status="UNRESERVED",
+            processed_at=existing.processed_at
+        ).model_dump()
+
+    sku_ids = sorted([item.sku_id for item in request.items])
     skus = db.execute(
-        select(SKU).where(SKU.id.in_(sku_ids)).with_for_update()
+        select(SKU).where(SKU.id.in_(sku_ids)).order_by(SKU.id).with_for_update()
     ).scalars().all()
     
     if len(skus) != len(sku_ids):
         missing_ids = set(sku_ids) - {sku.id for sku in skus}
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"code": "INVALID_REQUEST", "message": f"SKU not found: {missing_ids}"}
-        )
+        raise HTTPException(400, detail={"code": "INVALID_REQUEST", "message": f"SKU not found: {missing_ids}"})
     
-    # Создаём словарь sku_id → SKU для быстрого доступа
     sku_map = {sku.id: sku for sku in skus}
     
-    # Выполняем снятие резерва
     for item in request.items:
         sku = sku_map[item.sku_id]
+        reserved_before = sku.reserved_quantity
+        real_qty = min(item.quantity, reserved_before)
         
-        # Обновляем количества
-        sku.active_quantity += item.quantity
-        sku.reserved_quantity -= item.quantity
+        sku.active_quantity += real_qty
+        sku.reserved_quantity -= real_qty
         
-        # Защита от отрицательных значений (не должно происходить при корректной логике)
-        if sku.reserved_quantity < 0:
-            sku.reserved_quantity = 0
-            logger.warning(f"reserved_quantity became negative for sku_id={sku.id}, corrected to 0")
+        if item.quantity > reserved_before:
+            raise HTTPException(409, detail={
+                "code": "INSUFFICIENT_RESERVED",
+                "message": f"Cannot unreserve {item.quantity}, only {reserved_before} is reserved",
+                "details": {"sku_id": str(sku.id), "requested": item.quantity, "available": reserved_before}
+            })
     
-    # Сохраняем изменения
+    unreserve_op = UnreserveOperation(
+        order_id=request.order_id,
+        processed_at=datetime.now(timezone.utc)
+    )
+    db.add(unreserve_op)
     db.commit()
     
-    return UnreserveSuccessResponse(ok=True).model_dump()
+    return UnreserveSuccessResponse(
+        order_id=request.order_id,
+        status="UNRESERVED",
+        processed_at=datetime.now(timezone.utc)
+    ).model_dump()

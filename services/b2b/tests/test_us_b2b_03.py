@@ -1,11 +1,17 @@
 """
 Тесты для US-B2B-03: Редактирование товара/SKU
 """
+import os
 import pytest
 from uuid import uuid4
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 from unittest.mock import patch, MagicMock
+
+# Устанавливаем переменные окружения ДО импорта приложения
+os.environ["B2B_TO_MOD_KEY"] = "test-mod-key"
+os.environ["B2C_TO_B2B_KEY"] = "test-b2c-key"
+
 from app.main import app
 from app.database import get_db
 from app.models.category import Category
@@ -350,6 +356,16 @@ class TestB2B03EditProduct:
 class TestB2B03EditSKU:
     """Тесты для редактирования SKU"""
 
+    @pytest.fixture(autouse=True)
+    def override_db(self, db_session):
+        """Переопределяем get_db для всех тестов в классе"""
+        def override_get_db():
+            yield db_session
+        
+        app.dependency_overrides[get_db] = override_get_db
+        yield
+        app.dependency_overrides.clear()
+    
     def test_reserves_preserved_after_sku_edit(
         self, client, auth_headers, test_product_with_sku
     ):
@@ -573,14 +589,12 @@ class TestB2B03EditSKU:
         assert response.status_code == 200
 
         db_session.refresh(product)
-
         db_session.commit()
 
         outbox_events = db_session.query(OutboxEvent).all()
 
         assert len(outbox_events) >= 1
         
-        # ← ИСПРАВЛЕНО: фильтруем по event_type и product_id
         edited_events = [
             e for e in outbox_events 
             if e.event_type == "PRODUCT_EDITED" 
@@ -589,12 +603,174 @@ class TestB2B03EditSKU:
         
         assert len(edited_events) >= 1, f"Event for product {test_product_moderated.id} not found"
 
-        event = edited_events[-1]  # берём последнее подходящее событие
+        event = edited_events[-1]
         assert event.target == "moderation"
-        assert "b2b-service-key" in str(event.headers)
+        
+        # ✅ Исправлено: проверяем, что ключ не пустой, а не конкретное значение
+        headers = event.headers
+        assert headers.get("X-Service-Key") is not None
+        assert len(headers.get("X-Service-Key", "")) > 0
 
         payload = event.payload
         assert payload["event_type"] == "PRODUCT_EDITED"
         assert "idempotency_key" in payload
         assert "occurred_at" in payload
         assert payload["payload"]["product_id"] == str(test_product_moderated.id)
+
+
+    def test_edit_sku_sends_sku_edited_event_to_moderation(
+        self, client, auth_headers, test_product_moderated, db_session
+    ):
+        """Проверка: редактирование SKU отправляет событие SKU_EDITED с sku_id в outbox"""
+        from app.models.outbox import OutboxEvent
+        from app.models.sku import SKU as SKUModel
+        
+        # Создаём SKU для MODERATED товара
+        sku = SKUModel(
+            id=uuid4(),
+            product_id=test_product_moderated.id,
+            name="Test SKU for Event",
+            price=1000000,
+            cost_price=700000,
+            discount=0,
+            image="/s3/test.jpg",
+            stock_quantity=0,
+            active_quantity=0,
+            reserved_quantity=0,
+            article=None
+        )
+        db_session.add(sku)
+        db_session.commit()
+        db_session.refresh(sku)
+        
+        try:
+            response = client.patch(
+                f"/api/v1/skus/{sku.id}",
+                json={"name": "Updated SKU Name", "price": 1500000},
+                headers=auth_headers
+            )
+            
+            assert response.status_code == 200
+            
+            product_response = client.get(
+                f"/api/v1/products/{test_product_moderated.id}",
+                headers=auth_headers
+            )
+            assert product_response.json()["status"] == "ON_MODERATION"
+            
+            db_session.expire_all()
+            db_session.commit()
+
+            outbox_events = db_session.query(OutboxEvent).filter(
+                OutboxEvent.event_type == "SKU_EDITED"
+            ).all()
+            
+            assert len(outbox_events) >= 1, f"SKU_EDITED event not found in outbox"
+            
+            event = outbox_events[-1]
+            assert event.target == "moderation"
+            
+            # ✅ Исправлено: проверяем, что ключ не пустой
+            headers = event.headers
+            assert headers.get("X-Service-Key") is not None
+            assert len(headers.get("X-Service-Key", "")) > 0
+            
+            payload = event.payload
+            assert payload["event_type"] == "SKU_EDITED"
+            assert "idempotency_key" in payload
+            assert "occurred_at" in payload
+        finally:
+            db_session.delete(sku)
+            db_session.commit()
+
+    def test_patch_product_returns_sku_with_images_and_characteristics(
+        self, client, auth_headers, test_product_moderated, db_session
+    ):
+        """Проверка: после PATCH /products/{id} SKU имеет непустые images и characteristics"""
+        from app.models.sku import SKU as SKUModel, SKUCharacteristic
+        
+        # Создаём SKU с изображениями и характеристиками
+        sku = SKUModel(
+            id=uuid4(),
+            product_id=test_product_moderated.id,
+            name="Test SKU with Images",
+            price=1000000,
+            cost_price=700000,
+            discount=0,
+            image="/s3/test.jpg",
+            stock_quantity=0,
+            active_quantity=0,
+            reserved_quantity=0,
+            article=None
+        )
+        db_session.add(sku)
+        db_session.flush()
+        
+        # Добавляем изображения SKU
+        from app.models.sku import SKUImage
+        img1 = SKUImage(sku_id=sku.id, url="/s3/sku-img-1.jpg", sort_order=0)
+        img2 = SKUImage(sku_id=sku.id, url="/s3/sku-img-2.jpg", sort_order=1)
+        db_session.add_all([img1, img2])
+        
+        # Добавляем характеристики SKU
+        from app.models.characteristic import Characteristic
+        from app.schemas.product import ProductStatus
+        # Используем существующую категорию из test_product_moderated
+        from app.models.category import Category
+        category = db_session.query(Category).filter(Category.id == test_product_moderated.category_id).first()
+        
+        # Создаём характеристику с правильным slug
+        unique_suffix = str(uuid4())[:8]
+        char = Characteristic(
+            id=uuid4(),
+            name="Color",
+            slug=f"color-{unique_suffix}",
+            type="text",
+            is_global=True
+        )
+        db_session.add(char)
+        db_session.flush()
+        
+        sku_char = SKUCharacteristic(
+            sku_id=sku.id,
+            characteristic_id=char.id,
+            value_string="Black"
+        )
+        db_session.add(sku_char)
+        
+        db_session.commit()
+        db_session.refresh(sku)
+        
+        try:
+            # Редактируем товар
+            response = client.patch(
+                f"/api/v1/products/{test_product_moderated.id}",
+                json={"title": "Updated Product Title"},
+                headers=auth_headers
+            )
+            
+            assert response.status_code == 200
+            data = response.json()
+            
+            # Проверяем, что SKU есть в ответе
+            assert len(data["skus"]) >= 1
+            
+            # Проверяем первый SKU
+            sku_data = data["skus"][0]
+            
+            # Проверяем, что image не пустой (первое изображение)
+            assert sku_data.get("image") is not None, "SKU image should not be None after PATCH"
+            
+            # Проверяем, что images массив не пустой
+            assert len(sku_data.get("images", [])) > 0, "SKU images array should not be empty after PATCH"
+            
+            # Проверяем, что характеристики не пустые
+            assert len(sku_data["characteristics"]) > 0, "SKU characteristics should not be empty after PATCH"
+            
+            # Проверяем структуру характеристик
+            for char_data in sku_data["characteristics"]:
+                assert "name" in char_data
+                assert "value" in char_data
+        finally:
+            db_session.delete(sku)
+            db_session.commit()

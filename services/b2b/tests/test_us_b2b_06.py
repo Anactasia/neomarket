@@ -288,10 +288,10 @@ class TestB2B06AcceptInvoice:
         db_session.refresh(test_product_moderated["sku"])
         assert test_product_moderated["sku"].active_quantity == 7
 
-    def test_accept_invoice_rejected_returns_200_and_rejected(
+    def test_accept_invoice_rejected_returns_400(
         self, client, db_session, auth_headers, test_product_moderated
     ):
-        """Отказ от приёмки (accepted_quantity=0) → REJECTED"""
+        """Отказ от приёмки (accepted_quantity=0) → 400 Bad Request (REJECTED удалён из спецификации)"""
         # Создаём накладную
         invoice_resp = client.post(
             "/api/v1/invoices/",
@@ -309,7 +309,7 @@ class TestB2B06AcceptInvoice:
         invoice_id = invoice_resp.json()["id"]
         invoice_item_id = invoice_resp.json()["items"][0]["id"]
         
-        # Отказ от приёмки
+        # Отказ от приёмки (все accepted_quantity = 0)
         response = client.post(
             f"/api/v1/invoices/{invoice_id}/accept",
             json={
@@ -323,10 +323,10 @@ class TestB2B06AcceptInvoice:
             headers=auth_headers
         )
         
-        assert response.status_code == 200
-        data = response.json()
-        assert data["status"] == "REJECTED"
-        assert data["items"][0]["accepted_quantity"] == 0
+        # По спецификации REJECTED не существует → 400
+        assert response.status_code == 400
+        error_data = response.json()
+        assert error_data["code"] == "INVALID_REQUEST"
         
         # active_quantity не изменился
         db_session.refresh(test_product_moderated["sku"])
@@ -613,3 +613,71 @@ class TestB2B06CreateInvoice:
         assert response.status_code == 201
         data = response.json()
         assert len(data["items"]) == 2
+    
+
+    def test_accept_invoice_twice_returns_409(
+        self, client, db_session, auth_headers, test_product_moderated
+    ):
+        """Повторная приёмка уже PARTIALLY_ACCEPTED → 409 без удвоения остатков"""
+        # Создаём накладную
+        invoice_resp = client.post(
+            "/api/v1/invoices/",
+            json={"items": [{"sku_id": str(test_product_moderated["sku"].id), "quantity": 10}]},
+            headers=auth_headers
+        )
+        assert invoice_resp.status_code == 201
+        invoice_id = invoice_resp.json()["id"]
+        invoice_item_id = invoice_resp.json()["items"][0]["id"]
+        
+        # Первая приёмка — частичная
+        resp1 = client.post(
+            f"/api/v1/invoices/{invoice_id}/accept",
+            json={"accepted_items": [{"invoice_item_id": invoice_item_id, "accepted_quantity": 5}]},
+            headers=auth_headers
+        )
+        assert resp1.status_code == 200
+        assert resp1.json()["status"] == "PARTIALLY_ACCEPTED"
+        
+        # Запоминаем active_quantity после первой приёмки
+        db_session.refresh(test_product_moderated["sku"])
+        active_qty_after_first = test_product_moderated["sku"].active_quantity
+        assert active_qty_after_first == 5
+        
+        # Вторая приёмка (повторная) → 409
+        resp2 = client.post(
+            f"/api/v1/invoices/{invoice_id}/accept",
+            json={"accepted_items": [{"invoice_item_id": invoice_item_id, "accepted_quantity": 3}]},
+            headers=auth_headers
+        )
+        assert resp2.status_code == 409
+        assert resp2.json()["code"] == "INVALID_STATE"
+        
+        # active_quantity НЕ увеличился повторно
+        db_session.refresh(test_product_moderated["sku"])
+        assert test_product_moderated["sku"].active_quantity == active_qty_after_first  # осталось 5
+    
+
+    def test_accept_other_seller_invoice_returns_404_or_403(
+        self, client, db_session, auth_headers, test_other_seller_sku
+    ):
+        """Другой продавец пытается принять чужую накладную → 404 (из-за filter по seller_id)"""
+        # Сначала создаём накладную от другого продавца
+        other_auth = {"Authorization": f"Bearer {create_access_token(data={'sub': str(test_other_seller_sku['other_seller'].id)})}"}
+        
+        invoice_resp = client.post(
+            "/api/v1/invoices/",
+            json={"items": [{"sku_id": str(test_other_seller_sku["sku"].id), "quantity": 5}]},
+            headers=other_auth
+        )
+        assert invoice_resp.status_code == 201
+        invoice_id = invoice_resp.json()["id"]
+        
+        # Текущий продавец пытается принять
+        response = client.post(
+            f"/api/v1/invoices/{invoice_id}/accept",
+            json={},
+            headers=auth_headers  # текущий seller, не владелец
+        )
+        
+        # Должен быть 404, т.к. invoice не найден по (id, seller_id)
+        assert response.status_code == 404

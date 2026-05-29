@@ -7,6 +7,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.api import router as api_router
 from app.api.auth import router as auth_router  
 from app.core.logger import setup_logging
+from app.config import settings  # ← добавить импорт
 
 
 # Настройка логирования
@@ -21,6 +22,25 @@ app = FastAPI(
     redoc_url="/api/redoc"
 )
 
+
+# ==================== ВАЛИДАЦИЯ ПРИ СТАРТЕ ====================
+@app.on_event("startup")
+async def validate_config():
+    """
+    Проверяет, что все обязательные переменные окружения заданы.
+    Если какой-то ключ отсутствует — приложение не стартует.
+    """
+    try:
+        settings.validate_service_keys()
+        print("✅ Service keys validated successfully")
+        print(f"   - B2C_TO_B2B_KEY: {'✓ set' if settings.B2C_TO_B2B_KEY else '✗ missing'}")
+        print(f"   - B2B_TO_MOD_KEY: {'✓ set' if settings.B2B_TO_MOD_KEY else '✗ missing'}")
+    except ValueError as e:
+        print(f"❌ Configuration error: {e}")
+        raise RuntimeError(f"Missing required environment variables: {e}")
+
+
+# ==================== ОБРАБОТЧИКИ ОШИБОК ====================
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request, exc):
     errors = exc.errors()
@@ -42,6 +62,7 @@ async def validation_exception_handler(request, exc):
             "message": error_messages[0] if error_messages else "Validation error"
         }
     )
+
 
 @app.exception_handler(StarletteHTTPException)
 async def http_exception_handler(request, exc: StarletteHTTPException):
@@ -72,7 +93,8 @@ async def http_exception_handler(request, exc: StarletteHTTPException):
         }
     )
 
-# CORS
+
+# ==================== CORS ====================
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -81,11 +103,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Подключаем роутеры
-app.include_router(auth_router)      
+
+# ==================== РОУТЕРЫ ====================
+app.include_router(auth_router, prefix="/api/v1")      
 app.include_router(api_router)       
 
 
+# ==================== HEALTH CHECKS ====================
 @app.get("/")
 async def root():
     return {

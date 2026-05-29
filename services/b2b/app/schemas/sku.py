@@ -14,7 +14,7 @@ class SKUImageCreate(BaseModel):
 
 
 class SKUBase(BaseModel):
-    name: str = Field(..., min_length=1, max_length=255)
+    name: str = Field(..., min_length=1)
     price: int = Field(..., ge=0, description="Цена в копейках")
     cost_price: Optional[int] = Field(None, ge=0, description="Себестоимость в копейках")
     discount: int = Field(0, ge=0, description="Скидка в копейках")
@@ -63,7 +63,7 @@ class SKUCreateWithValidation(SKUCreate):
 # ----- FOR UPDATE -----
 class SKUUpdate(BaseModel):
     """Схема для обновления SKU (все поля опциональные)"""
-    name: Optional[str] = Field(None, min_length=1, max_length=255)
+    name: Optional[str] = Field(None, min_length=1)
     price: Optional[int] = Field(None, ge=0)
     cost_price: Optional[int] = Field(None, ge=0)
     discount: Optional[int] = Field(None, ge=0)
@@ -149,3 +149,24 @@ class SKUInProduct(BaseModel):
 
     class Config:
         populate_by_name = True
+
+
+class SKUResponse(BaseModel):
+    """Полный ответ со SKU (для seller cabinet)"""
+    id: UUID
+    product_id: UUID
+    name: str
+    price: int
+    cost_price: Optional[int] = None
+    discount: int = 0
+    stock_quantity: int = 0
+    active_quantity: int = 0
+    reserved_quantity: int = 0
+    article: Optional[str] = None
+    images: List[SKUImageResponse] = []
+    characteristics: List[SKUCharacteristicResponse] = []
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    
+    class Config:
+        from_attributes = True

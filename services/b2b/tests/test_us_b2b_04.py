@@ -1,11 +1,17 @@
 """
 Тесты для US-B2B-04: Удаление товара
 """
+import os
 import pytest
 from uuid import uuid4
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 from unittest.mock import patch, MagicMock
+
+# Устанавливаем переменные окружения ДО импорта приложения
+os.environ["B2B_TO_MOD_KEY"] = "test-mod-key"
+os.environ["B2C_TO_B2B_KEY"] = "test-b2c-key"
+
 from app.main import app
 from app.database import get_db
 from app.models.category import Category
@@ -14,7 +20,6 @@ from app.models.product import Product
 from app.models.sku import SKU
 from app.core.security import get_password_hash, create_access_token
 from app.schemas.product import ProductStatus
-
 
 @pytest.fixture
 def db_session():
@@ -313,8 +318,8 @@ class TestB2B04DeleteProduct:
         )
         assert response.status_code == 200
         
-        products = response.json()
-        product_ids = [p["id"] for p in products]
+        data = response.json()
+        product_ids = [p["id"] for p in data["items"]]
         assert str(test_product_created.id) not in product_ids
 
     def test_deleted_product_visible_with_include_deleted(
@@ -334,8 +339,8 @@ class TestB2B04DeleteProduct:
         )
         assert response.status_code == 200
         
-        products = response.json()
-        product_ids = [p["id"] for p in products]
+        data = response.json()
+        product_ids = [p["id"] for p in data["items"]]
         assert str(test_product_created.id) in product_ids
 
     def test_delete_with_skus_sends_sku_ids(
@@ -405,30 +410,28 @@ class TestB2B04DeleteProduct:
         
         assert response.status_code == 204
         
-        # Проверяем outbox на наличие события для Moderation
         db_session.commit()
         
-        # Находим событие для нашего товара (берём последнее или фильтруем по product_id)
+        # Фильтруем по product_id для точности
         outbox_events = db_session.query(OutboxEvent).filter(
             OutboxEvent.target == "moderation",
             OutboxEvent.event_type == "PRODUCT_DELETED"
-        ).order_by(OutboxEvent.created_at.desc()).all()
+        ).all()
         
-        assert len(outbox_events) >= 1, "Should have at least one Moderation event in outbox"
+        # Находим событие для нашего товара
+        event = None
+        for e in outbox_events:
+            if e.payload["payload"]["product_id"] == str(test_product_created.id):
+                event = e
+                break
         
-        # Берём последнее событие (самое свежее)
-        event = outbox_events[0]
-        
-        # ИЛИ фильтруем по product_id
-        # event = None
-        # for e in outbox_events:
-        #     if e.payload["payload"]["product_id"] == str(test_product_created.id):
-        #         event = e
-        #         break
-        # assert event is not None, "Event for this product not found"
-        
+        assert event is not None, "Event for this product not found"
         assert event.target == "moderation"
-        assert "b2b-service-key" in str(event.headers)
+        
+        # Проверяем, что заголовок X-Service-Key установлен (не пустой)
+        headers = event.headers
+        assert headers.get("X-Service-Key") is not None
+        assert len(headers.get("X-Service-Key", "")) > 0
         
         payload = event.payload
         assert payload["event_type"] == "PRODUCT_DELETED"

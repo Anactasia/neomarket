@@ -1,4 +1,3 @@
-# app/schemas/seller.py
 from pydantic import BaseModel, EmailStr, Field, field_validator
 from typing import Optional
 from uuid import UUID
@@ -10,6 +9,10 @@ from app.schemas.validators import (
     validate_company_name
 )
 
+
+# ============================================================
+# ВНУТРЕННИЕ СХЕМЫ (для БД и внутреннего использования)
+# ============================================================
 
 class SellerBase(BaseModel):
     company_name: str = Field(..., max_length=255)
@@ -72,8 +75,9 @@ class SellerUpdateWithValidation(SellerUpdate):
         return validate_phone(v)
 
 
-# ----- FOR RESPONSE -----
+# ----- ВНУТРЕННЯЯ МОДЕЛЬ (для БД) -----
 class Seller(SellerBase):
+    """Внутренняя модель продавца (для БД)"""
     id: UUID
     status: str
     rating: Optional[float] = None
@@ -83,3 +87,43 @@ class Seller(SellerBase):
 
     class Config:
         from_attributes = True
+
+
+# ============================================================
+# ПУБЛИЧНЫЕ СХЕМЫ (по спецификации neomarket-b2b.yaml)
+# ============================================================
+
+class SellerResponse(BaseModel):
+    """Ответ с данными продавца по спецификации OpenAPI"""
+    id: UUID
+    email: EmailStr
+    first_name: str
+    last_name: str
+    middle_name: Optional[str] = None
+    company_name: str
+    inn: str
+    phone: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+
+class SellerRegisterRequest(BaseModel):
+    """Запрос на регистрацию продавца (по спецификации)"""
+    email: EmailStr
+    password: str = Field(..., min_length=8, max_length=128)
+    first_name: str = Field(..., min_length=1, max_length=100)
+    last_name: str = Field(..., min_length=1, max_length=100)
+    middle_name: Optional[str] = Field(None, max_length=100)
+    company_name: str = Field(..., min_length=1, max_length=255)
+    inn: str = Field(..., min_length=10, max_length=12)
+    phone: Optional[str] = Field(None, pattern=r'^\+?[0-9]{10,15}$')
+    
+    @field_validator('password')
+    @classmethod
+    def validate_password(cls, v: str) -> str:
+        if len(v) < 8:
+            raise ValueError('password must be at least 8 characters')
+        return v

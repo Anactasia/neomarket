@@ -6,7 +6,6 @@ from enum import Enum
 
 from app.schemas.common import (
     CategoryRef, 
-    ImageResponse, 
     CharacteristicValue, 
     SKUInProduct,
     ProductImageCreate,
@@ -75,15 +74,13 @@ class ProductResponse(BaseModel):
     description: str
     status: ProductStatus
     deleted: bool
-    blocked: bool = False
-    blocking_reason: Optional[BlockingReason] = None
-    field_reports: List[FieldReport] = []
+    blocking_reason_id: Optional[UUID] = None  
     moderator_comment: Optional[str] = None
     images: List[ProductImageResponse]
     characteristics: List[CharacteristicValueResponse]
     skus: List[SKUInProduct] = []
     created_at: datetime
-    updated_at: Optional[datetime] = None
+    updated_at: datetime
     
     class Config:
         from_attributes = True
@@ -94,6 +91,7 @@ class ProductUpdate(BaseModel):
     description: Optional[str] = None
     category_id: Optional[UUID] = None
     characteristics: Optional[List[CharacteristicValue]] = None
+    images: Optional[List[ProductImageResponse]] = None  # ← Добавлено для поддержки PATCH изображений
 
 
 class Product(BaseModel):
@@ -104,7 +102,7 @@ class Product(BaseModel):
     description: Optional[str] = None
     category_id: UUID
     created_at: datetime
-    updated_at: Optional[datetime] = None
+    updated_at: datetime  
     
     class Config:
         from_attributes = True
@@ -120,7 +118,7 @@ class ProductPublicShortResponse(BaseModel):
     status: ProductStatus
     category_id: UUID
     created_at: datetime
-    min_price: Optional[int] = None
+    min_price: int
     cover_image: Optional[str] = None
     
     class Config:
@@ -157,7 +155,34 @@ class ProductPublicResponse(BaseModel):
     characteristics: List[CharacteristicValueResponse]
     skus: List[SKUPublicResponse]
     created_at: datetime
-    updated_at: Optional[datetime] = None
+    updated_at: datetime  
+    
+    class Config:
+        from_attributes = True
+
+
+class ProductShortResponse(BaseModel):
+    """Краткая карточка товара для списка продавца"""
+    id: UUID
+    title: str
+    slug: str
+    status: ProductStatus
+    category_id: UUID
+    deleted: bool
+    created_at: datetime
+    min_price: int
+    cover_image: Optional[str] = None
+    
+    class Config:
+        from_attributes = True
+
+
+class ProductPaginatedResponse(BaseModel):
+    """Пагинированный ответ списка товаров продавца"""
+    items: List[ProductShortResponse]
+    total_count: int
+    limit: int
+    offset: int
     
     class Config:
         from_attributes = True
@@ -172,6 +197,19 @@ class ProductPublicPaginatedResponse(BaseModel):
     
     class Config:
         from_attributes = True
+
+
+class ImageAttachRequest(BaseModel):
+    """Прикрепление изображения к товару/SKU"""
+    image_id: Optional[UUID] = None
+    url: Optional[str] = None
+    ordering: int = 0
+
+
+class ImageUpdateRequest(BaseModel):
+    """Обновление изображения товара/SKU"""
+    url: Optional[str] = None
+    ordering: Optional[int] = None
 
 
 class BatchProductIdsRequest(BaseModel):

@@ -1,18 +1,22 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Header
 from app.services.outbox import save_to_outbox
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 from sqlalchemy import func
 from typing import List, Optional
+from fastapi import Query
 from uuid import UUID
 import json
 import uuid as uuid_module
 import uuid
 import os
+
 from app.database import get_db
 from app.models.category import Category
 from app.models.product import Product, ProductImage
-from app.models.sku import SKU
-from app.schemas.sku import SKU as SKUResponse
+from app.models.sku import SKU, SKUImage
+from app.schemas.sku import SKU as SKUResponse, SKUImageResponse, SKUCharacteristicResponse
+from app.models.sku import SKU, SKUImage, SKUCharacteristic
+from app.models.characteristic import Characteristic
 from app.models.seller import Seller
 from app.schemas.product import (
     ProductCreate,
@@ -20,26 +24,24 @@ from app.schemas.product import (
     ProductUpdate,
     ProductStatus,
     CharacteristicValue,
-    ImageResponse,
     Product as ProductSchema,
     BlockingReason,
     FieldReport,
+    ProductShortResponse,
+    ProductPaginatedResponse,
     ProductPublicShortResponse,
     ProductPublicResponse,
     ProductPublicPaginatedResponse,
     SKUPublicResponse,
-    BatchProductIdsRequest
+    BatchProductIdsRequest,
+    ImageAttachRequest,
+    ImageUpdateRequest
 )
 from app.schemas.common import CategoryRef, SKUInProduct, CharacteristicValueResponse, ProductImageResponse
 from app.dependencies.auth import get_current_seller, get_current_seller_optional  # ← реальная JWT аутентификация
+from app.dependencies.service_keys import verify_moderation_service_key
 
 router = APIRouter()
-
-def verify_service_key(x_service_key: Optional[str]) -> bool:
-    """Проверяет валидность X-Service-Key для межсервисных вызовов"""
-    expected_key = os.getenv("B2B_SERVICE_KEY", "b2b-service-key")
-    return x_service_key == expected_key
-
 
 
 def error_response(code: str, message: str, status_code: int = 422):
@@ -49,45 +51,27 @@ def error_response(code: str, message: str, status_code: int = 422):
     )
 def product_to_full_response(product: Product, db: Session) -> ProductResponse:
     """Преобразует Product в полный ProductResponse (с cost_price, reserved_quantity)"""
-    # Формируем blocking_reason
-    blocking_reason = None
-    if product.blocked and product.blocking_reason_id:
-        blocking_reason = BlockingReason(
-            id=product.blocking_reason_id,
-            title="Товар заблокирован модерацией",
-            comment=product.moderation_comment
-        )
-    
-    # Формируем field_reports
-    field_reports = []
-    if hasattr(product, 'field_reports_json') and product.field_reports_json:
-        for fr in product.field_reports_json:
-            field_reports.append(FieldReport(
-                field_name=fr.get("field_name", ""),
-                sku_id=UUID(fr["sku_id"]) if fr.get("sku_id") else None,
-                comment=fr.get("comment", "")
-            ))
     
     # Формируем SKU с полными данными
     skus = []
     for sku in product.skus:
-        skus.append(SKUResponse(
-            id=sku.id,
-            product_id=sku.product_id,
-            name=sku.name,
-            price=sku.price,
-            cost_price=sku.cost_price,
-            discount=sku.discount or 0,
-            stock_quantity=sku.stock_quantity,
-            active_quantity=sku.active_quantity,
-            reserved_quantity=sku.reserved_quantity,
-            article=sku.article,
-            images=[],  # 
-            characteristics=[],  # 
-            created_at=sku.created_at,
-            updated_at=sku.updated_at
-        ))
-
+        skus.append({
+            "id": sku.id,
+            "name": sku.name,
+            "price": sku.price,
+            "cost_price": sku.cost_price,
+            "discount": sku.discount or 0,
+            "image": sku.images[0].url if sku.images else None,
+            "images": [img.url for img in sku.images],
+            "active_quantity": sku.active_quantity,
+            "reserved_quantity": sku.reserved_quantity,
+            "characteristics": [
+                CharacteristicValue(
+                    name=char.characteristic.name if char.characteristic else "Characteristic",
+                    value=char.value_string or ""
+                ) for char in sku.characteristics
+            ]
+        })
     
     return ProductResponse(
         id=product.id,
@@ -97,10 +81,8 @@ def product_to_full_response(product: Product, db: Session) -> ProductResponse:
         slug=product.slug or "",
         description=product.description or "",
         status=ProductStatus(product.status),
-        deleted=product.deleted,
-        blocked=product.blocked,
-        blocking_reason=blocking_reason,
-        field_reports=field_reports,
+        deleted=product.deleted,  # ← ДОБАВИТЬ
+        blocking_reason_id=product.blocking_reason_id,
         moderator_comment=product.moderation_comment,
         images=[
             ProductImageResponse(
@@ -118,7 +100,7 @@ def product_to_full_response(product: Product, db: Session) -> ProductResponse:
         ],
         skus=skus,
         created_at=product.created_at,
-        updated_at=product.updated_at
+        updated_at=product.updated_at or product.created_at
     )
 
 
@@ -146,18 +128,29 @@ def product_to_public_response(product: Product, db: Session) -> ProductPublicRe
     # Формируем SKU без чувствительных полей
     skus = []
     for sku in product.skus:
-        # Фильтруем только SKU с остатком? Нет, показываем все
         skus.append(SKUPublicResponse(
             id=sku.id,
-            product_id=sku.product_id,           # ← добавить!
+            product_id=sku.product_id,
             name=sku.name,
             price=sku.price,
             discount=sku.discount or 0,
-            stock_quantity=sku.stock_quantity,   # ← добавить!
+            stock_quantity=sku.stock_quantity,
             active_quantity=sku.active_quantity,
             article=sku.article,
-            images=[],  # TODO: добавить реальные изображения SKU
-            characteristics=[]  # TODO: добавить реальные характеристики SKU
+            images=[
+                SKUImageResponse(
+                    id=img.id,
+                    url=img.url,
+                    ordering=img.sort_order
+                ) for img in sku.images
+            ],
+            characteristics=[
+                SKUCharacteristicResponse(
+                    id=char.id,
+                    name=char.characteristic.name if char.characteristic else "Characteristic",
+                    value=char.value_string or ""
+                ) for char in sku.characteristics
+            ]
         ))
     
     return ProductPublicResponse(
@@ -184,9 +177,9 @@ def product_to_public_response(product: Product, db: Session) -> ProductPublicRe
         ],
         skus=skus,
         created_at=product.created_at,
-        updated_at=product.updated_at
+        updated_at=product.updated_at or product.created_at
     )
-
+    
 def send_event_to_moderation_sync(
     product_id: UUID,
     seller_id: UUID,
@@ -231,12 +224,12 @@ def send_event_to_moderation_sync(
     
     # Сохраняем в outbox вместо прямой отправки
     save_to_outbox(
-        db=db,
+        db=db,  
         event_type=event_type,
         target="moderation",
         url=f"{moderation_url}/api/v1/b2b/events",
         payload=event_payload,
-        headers={"X-Service-Key": "b2b-service-key"}
+        headers={"X-Service-Key": os.getenv("B2B_TO_MOD_KEY", "")}
     )
     
 
@@ -358,40 +351,61 @@ def create_product(
         updated_at=db_product.updated_at
     )
     
-@router.get("/", response_model=List[ProductSchema])
+@router.get("/", response_model=ProductPaginatedResponse)
 def get_products(
-    skip: int = 0,
-    limit: int = 100,
-    seller_id: Optional[UUID] = None,
-    category_id: Optional[UUID] = None,
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     status: Optional[str] = None,
+    search: Optional[str] = None,  # ← добавить для поиска
     include_deleted: bool = False,
     db: Session = Depends(get_db),
-    current_seller: Seller = Depends(get_current_seller)  # ← авторизация для списка товаров
+    current_seller: Seller = Depends(get_current_seller)
 ):
     """
-    Получить список товаров текущего продавца с фильтрацией.
-    seller_id из query игнорируется — всегда фильтруем по текущему продавцу.
-    Удалённые товары не включаются по умолчанию (include_deleted=false).
+    Получить список товаров текущего продавца с пагинацией.
+    
+    IDOR защита: seller_id всегда берётся из JWT токена.
     """
-    # Всегда фильтруем по текущему продавцу (безопасность)
+    # Базовый фильтр: только товары текущего продавца
     query = db.query(Product).filter(Product.seller_id == current_seller.id)
 
-    if category_id:
-        query = query.filter(Product.category_id == category_id)
     if status:
         query = query.filter(Product.status == status)
     if not include_deleted:
         query = query.filter(Product.deleted == False)
+    if search:
+        query = query.filter(Product.title.ilike(f"%{search}%"))
 
-    # Игнорируем переданный seller_id (защита от IDOR)
-    if seller_id:
-        # Можно вернуть 400 или просто игнорировать
-        pass
+    total_count = query.count()
+    products = query.options(
+        selectinload(Product.skus),
+        selectinload(Product.images)
+    ).offset(offset).limit(limit).all()
     
-    products = query.offset(skip).limit(limit).all()
-    return products
-
+    items = []
+    for product in products:
+        skus = product.skus  
+        min_price = min([sku.price for sku in skus], default=0) if skus else 0
+        cover_image = product.images[0].url if product.images else None
+        
+        items.append(ProductShortResponse(
+            id=product.id,
+            title=product.title,
+            slug=product.slug or "",
+            status=ProductStatus(product.status),
+            category_id=product.category_id,
+            deleted=product.deleted,
+            created_at=product.created_at,
+            min_price=min_price,
+            cover_image=cover_image
+        ))
+    
+    return ProductPaginatedResponse(
+        items=items,
+        total_count=total_count,
+        limit=limit,
+        offset=offset
+    )
 
 @router.get("/{product_id}", response_model=ProductResponse)
 def get_product(
@@ -409,11 +423,16 @@ def get_product(
     
     IDOR: при JWT проверяется seller_id, при X-Service-Key — нет
     """
-    is_service_call = x_service_key is not None and verify_service_key(x_service_key)
+    is_service_call = x_service_key is not None and verify_moderation_service_key(x_service_key)
     
     if is_service_call:
         # Сервисный режим — без проверки seller_id
-        product = db.query(Product).filter(
+        product = db.query(Product).options(
+            selectinload(Product.skus).selectinload(SKU.images),
+            selectinload(Product.skus).selectinload(SKU.characteristics).selectinload(SKUCharacteristic.characteristic),
+            selectinload(Product.images),
+            selectinload(Product.characteristics)
+        ).filter(
             Product.id == product_id,
             Product.deleted == False
         ).first()
@@ -502,6 +521,14 @@ def update_product(
     # Если товар в MODERATED или BLOCKED → переводим в ON_MODERATION
     if product.status in [ProductStatus.MODERATED.value, ProductStatus.BLOCKED.value]:
         product.status = ProductStatus.ON_MODERATION.value
+
+
+        if product.blocked:
+            product.blocked = False
+            product.blocking_reason_id = None
+            product.moderation_comment = None
+            # field_reports_json можно оставить для истории или тоже сбросить
+            # product.field_reports_json = None
     
     # 7. Отправляем событие EDITED в Moderation (если нужно)
     # Отправляем всегда, кроме случая, когда товар только создан и не блокирован
@@ -510,12 +537,17 @@ def update_product(
         product.blocked or
         old_status in [ProductStatus.MODERATED.value, ProductStatus.BLOCKED.value]
     )
-
+    
     print(f"DEBUG: should_send_event={should_send_event}, old_status={old_status}, new_status={product.status}")
 
     if should_send_event:
         print(f"DEBUG: ВХОДИМ, отправляем PRODUCT_EDITED, product_id={product.id}")
-        idempotency_key = uuid_module.uuid4()
+        
+        import hashlib
+
+        # Создаём детерминированный ключ на основе данных события
+        key_string = f"{product.id}:PRODUCT_EDITED:{old_status}:{product.status}"
+        idempotency_key = str(uuid_module.uuid5(uuid_module.NAMESPACE_DNS, key_string))
         
         json_before = {
             "product_id": str(product.id),
@@ -559,6 +591,140 @@ def update_product(
     # 9. Возвращаем обновленный товар
     return product_to_full_response(product, db)
     
+
+@router.get("/{product_id}/skus", response_model=List[SKUResponse])
+def list_product_skus(
+    product_id: UUID, 
+    db: Session = Depends(get_db),
+    current_seller: Seller = Depends(get_current_seller)
+):
+    """Все SKU товара (seller view)"""
+    product = db.query(Product).options(
+        selectinload(Product.skus).selectinload(SKU.images),
+        selectinload(Product.skus).selectinload(SKU.characteristics).selectinload(SKUCharacteristic.characteristic)
+    ).filter(Product.id == product_id).first()
+    
+    if not product:
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "Product not found"})
+    
+    if product.seller_id != current_seller.id:
+        raise HTTPException(status_code=403, detail={"code": "NOT_OWNER", "message": "Product does not belong to you"})
+    
+    skus = []
+    for sku in product.skus: 
+        skus.append(SKUResponse(
+            id=sku.id,
+            product_id=sku.product_id,
+            name=sku.name,
+            price=sku.price,
+            cost_price=sku.cost_price,
+            discount=sku.discount or 0,
+            stock_quantity=sku.stock_quantity,
+            active_quantity=sku.active_quantity,
+            reserved_quantity=sku.reserved_quantity,
+            article=sku.article,
+            images=[
+                SKUImageResponse(
+                    id=img.id,
+                    url=img.url,
+                    ordering=img.sort_order
+                ) for img in sku.images
+            ],
+            characteristics=[
+                SKUCharacteristicResponse(
+                    id=char.id,
+                    name=char.characteristic.name if char.characteristic else "Characteristic",
+                    value=char.value_string or ""
+                ) for char in sku.characteristics
+            ],
+            created_at=sku.created_at,
+            updated_at=sku.updated_at
+        ))
+    
+    return skus
+
+
+@router.post("/{product_id}/images", response_model=ProductImageResponse, status_code=status.HTTP_201_CREATED)
+def add_product_image(
+    product_id: UUID, 
+    image_data: ImageAttachRequest,
+    db: Session = Depends(get_db),
+    current_seller: Seller = Depends(get_current_seller)
+):
+    """Прикрепить изображение к товару"""
+    product = db.query(Product).filter(Product.id == product_id).first()
+    if not product:
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "Product not found"})
+    
+    if product.seller_id != current_seller.id:
+        raise HTTPException(status_code=403, detail={"code": "NOT_OWNER", "message": "Product does not belong to you"})
+    
+    db_image = ProductImage(
+        product_id=product_id,
+        url=image_data.url or "",
+        sort_order=image_data.ordering
+    )
+    db.add(db_image)
+    db.commit()
+    db.refresh(db_image)
+
+    return ProductImageResponse(
+        id=db_image.id,
+        url=db_image.url,
+        ordering=db_image.sort_order
+    )
+    
+
+@router.patch("/images/{image_id}", response_model=ProductImageResponse)
+def update_product_image(
+    image_id: UUID,
+    image_data: ImageUpdateRequest,
+    db: Session = Depends(get_db),
+    current_seller: Seller = Depends(get_current_seller)
+):
+    """Обновить изображение товара (ordering)"""
+    image = db.query(ProductImage).filter(ProductImage.id == image_id).first()
+    if not image:
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "Image not found"})
+    
+    product = db.query(Product).filter(Product.id == image.product_id).first()
+    if product.seller_id != current_seller.id:
+        raise HTTPException(status_code=403, detail={"code": "NOT_OWNER", "message": "Product does not belong to you"})
+    
+    if image_data.url is not None:
+        image.url = image_data.url
+    if image_data.ordering is not None:
+        image.sort_order = image_data.ordering
+    
+    db.commit()
+    db.refresh(image)
+    
+    return ProductImageResponse(
+        id=image.id,
+        url=image.url,
+        ordering=image.sort_order
+    )
+
+
+@router.delete("/images/{image_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_product_image(
+    image_id: UUID,
+    db: Session = Depends(get_db),
+    current_seller: Seller = Depends(get_current_seller)
+):
+    """Удалить изображение товара"""
+    image = db.query(ProductImage).filter(ProductImage.id == image_id).first()
+    if not image:
+        raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": "Image not found"})
+    
+    product = db.query(Product).filter(Product.id == image.product_id).first()
+    if product.seller_id != current_seller.id:
+        raise HTTPException(status_code=403, detail={"code": "NOT_OWNER", "message": "Product does not belong to you"})
+    
+    db.delete(image)
+    db.commit()
+    return None
+
 
 @router.delete("/{product_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_product(

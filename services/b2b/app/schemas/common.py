@@ -19,11 +19,6 @@ class Image(BaseModel):
     ordering: int = 0
 
 
-class ImageResponse(BaseModel):
-    """Ответ с изображением (по общей спецификации)"""
-    id: UUID                              # ← ДОБАВИТЬ id
-    url: str
-    ordering: int = 0
 
 
 class CharacteristicValue(BaseModel):
@@ -61,6 +56,7 @@ class SKUInProduct(BaseModel):
     cost_price: int = 0  # Для seller cabinet
     discount: int = 0
     image: Optional[str] = None
+    images: List[str] = []  # ← Добавлен массив изображений
     active_quantity: int
     reserved_quantity: int = 0  # Для seller cabinet
     characteristics: List[CharacteristicValue] = []  # ← без id (для SKU внутри Product)
@@ -80,3 +76,14 @@ class ProductImageResponse(BaseModel):
     id: UUID
     url: str
     ordering: int
+
+class ImageUploadResponse(BaseModel):
+    """Ответ на загрузку изображения (POST /images)"""
+    id: UUID
+    url: str
+    ordering: int
+    entity_type: str  # PRODUCT или SKU
+    entity_id: Optional[UUID] = None
+    
+    class Config:
+        from_attributes = True

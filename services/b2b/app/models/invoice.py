@@ -11,9 +11,11 @@ class Invoice(BaseModel):
     seller_id = Column(GUID, ForeignKey("sellers.id", ondelete="CASCADE"), nullable=False)
     status = Column(String(20), nullable=False, default="CREATED")  # CREATED, PARTIALLY_ACCEPTED, ACCEPTED, CANCELLED
     accepted_at = Column(DateTime(timezone=True), nullable=True)
+    accepted_by_id = Column(GUID, ForeignKey("sellers.id", ondelete="SET NULL"), nullable=True)  # Оператор-админ, принявший накладную
     
-    seller = relationship("Seller", back_populates="invoices")
+    seller = relationship("Seller", foreign_keys=[seller_id], back_populates="invoices")
     items = relationship("InvoiceItem", back_populates="invoice", cascade="all, delete-orphan")
+    accepted_by = relationship("Seller", foreign_keys=[accepted_by_id])
     
 
 class InvoiceItem(BaseModel):

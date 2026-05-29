@@ -1,14 +1,15 @@
 """
 Tests for US-B2B-08: Reserve / Unreserve SKU
-
-Сценарии из канон-flow «резервирование SKU»:
-- happy: reserve_all_skus_succeeds, idempotent_reserve_returns_200_without_double_deduction
-- unhappy: partial_insufficient_stock_returns_409_all_rollback, sku_out_of_stock_event_emitted, unreserve_restores_quantities
 """
+import os
 import pytest
 from uuid import uuid4
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
+
+# Устанавливаем переменные окружения для тестов
+os.environ["B2C_TO_B2B_KEY"] = "test-b2c-key"
+os.environ["B2B_TO_MOD_KEY"] = "test-mod-key"
 
 from app.main import app
 from app.models.product import Product
@@ -37,7 +38,7 @@ def db_session():
 @pytest.fixture
 def service_key():
     """X-Service-Key для межсервисных вызовов"""
-    return "b2b-service-key"
+    return "test-b2c-key"  # ← ИСПРАВЛЕНО
 
 
 @pytest.fixture
@@ -130,11 +131,10 @@ class TestB2B08ReserveUnreserve:
         assert response.status_code == 200
         data = response.json()
         
-        assert data["reserved"] is True
-        assert len(data["items"]) == 1
-        assert data["items"][0]["sku_id"] == str(sku.id)
-        assert data["items"][0]["reserved_quantity"] == 3
-        assert data["items"][0]["remaining_stock"] == 7
+        # Новый формат по спецификации
+        assert data["order_id"] == str(order_id)
+        assert data["status"] == "RESERVED"
+        assert "reserved_at" in data
         
         # Проверяем, что quantities обновлены в БД
         db_session.refresh(sku)
@@ -224,12 +224,18 @@ class TestB2B08ReserveUnreserve:
         assert response.status_code == 409
         data = response.json()
         
-        assert data["reserved"] is False
-        assert len(data["failed_items"]) == 1
-        assert data["failed_items"][0]["sku_id"] == str(sku2.id)
-        assert data["failed_items"][0]["requested"] == 5
-        assert data["failed_items"][0]["available"] == 2
-        assert data["failed_items"][0]["reason"] == "INSUFFICIENT_STOCK"
+        # Новый формат ошибки
+        assert data["code"] == "INSUFFICIENT_STOCK"
+        assert "message" in data
+        assert "details" in data
+        assert "failed_items" in data["details"]
+        
+        failed_items = data["details"]["failed_items"]
+        assert len(failed_items) == 1
+        assert failed_items[0]["sku_id"] == str(sku2.id)
+        assert failed_items[0]["requested"] == 5
+        assert failed_items[0]["available"] == 2
+        assert failed_items[0]["reason"] == "INSUFFICIENT_STOCK"
         
         # Проверяем, что ничто не зарезервировано (all-or-nothing)
         db_session.refresh(sku1)
@@ -291,7 +297,8 @@ class TestB2B08ReserveUnreserve:
         
         assert response1.status_code == 200
         data1 = response1.json()
-        assert data1["items"][0]["reserved_quantity"] == 3
+        assert data1["order_id"] == str(order_id)
+        assert data1["status"] == "RESERVED"
         
         # Второй запрос с тем же ключом
         response2 = client.post(
@@ -310,7 +317,8 @@ class TestB2B08ReserveUnreserve:
         data2 = response2.json()
         
         # Результат тот же
-        assert data2["items"][0]["reserved_quantity"] == 3
+        assert data2["order_id"] == data1["order_id"]
+        assert data2["status"] == data1["status"]
         
         # Проверяем, что quantities не изменились
         db_session.refresh(sku)
@@ -443,7 +451,10 @@ class TestB2B08ReserveUnreserve:
         
         assert unreserve_response.status_code == 200
         data = unreserve_response.json()
-        assert data["ok"] is True
+        # Новый формат ответа unreserve
+        assert data["order_id"] == str(unreserve_order_id)
+        assert data["status"] == "UNRESERVED"
+        assert "processed_at" in data
         
         # Проверяем, что quantities восстановлены
         db_session.refresh(sku)

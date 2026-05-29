@@ -39,7 +39,7 @@ class Seller(BaseModel):
     
     # Связи
     products = relationship("Product", back_populates="seller")
-    invoices = relationship("Invoice", back_populates="seller")
+    invoices = relationship("Invoice", foreign_keys="[Invoice.seller_id]", back_populates="seller")
     
     @property
     def full_name(self) -> str:
