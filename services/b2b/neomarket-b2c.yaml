@@ -7,7 +7,7 @@ info:
     - Команда Без Диких Ягод (cart/catalog/orders endpoints) — deepObject-фильтры,
       POST /cart/validate, подписки на товары, баннеры/коллекции
     - Команда fukhen-dukhen — пагинация {items, total_count, limit, offset}, CategoryRef
-    
+
     Ключевые правила:
     - Все ID — UUID (string, format: uuid)
     - Все денежные значения — в копейках (integer)
@@ -62,20 +62,20 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/BuyerRegisterRequest'
+              $ref: "#/components/schemas/BuyerRegisterRequest"
       responses:
-        '201':
+        "201":
           description: Покупатель создан, возвращены токены
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/TokenResponse'
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '409':
+                $ref: "#/components/schemas/TokenResponse"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "409":
           description: Email уже зарегистрирован
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Error' }
+              schema: { $ref: "#/components/schemas/Error" }
 
   /api/v1/auth/login:
     post:
@@ -86,21 +86,21 @@ paths:
         она сольётся с пользовательской по правилу max(quantity).
       security: []
       parameters:
-        - $ref: '#/components/parameters/SessionIdOptional'
+        - $ref: "#/components/parameters/SessionIdOptional"
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/LoginRequest'
+              $ref: "#/components/schemas/LoginRequest"
       responses:
-        '200':
+        "200":
           description: Успешный вход
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/TokenResponse'
-        '401': { $ref: '#/components/responses/Unauthorized' }
+                $ref: "#/components/schemas/TokenResponse"
+        "401": { $ref: "#/components/responses/Unauthorized" }
 
   /api/v1/auth/refresh:
     post:
@@ -117,20 +117,20 @@ paths:
               properties:
                 refresh_token: { type: string }
       responses:
-        '200':
+        "200":
           description: Новая пара токенов
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/TokenResponse' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
+              schema: { $ref: "#/components/schemas/TokenResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
 
   /api/v1/auth/logout:
     post:
       tags: [Auth]
       summary: Выход (отзыв refresh-токена)
       responses:
-        '204': { description: Успех }
-        '401': { $ref: '#/components/responses/Unauthorized' }
+        "204": { description: Успех }
+        "401": { $ref: "#/components/responses/Unauthorized" }
 
   # -------------------- BUYER --------------------
   /api/v1/buyers/me:
@@ -139,12 +139,12 @@ paths:
       summary: Профиль текущего покупателя
       description: ID берётся из JWT, не из тела/пути (защита от IDOR).
       responses:
-        '200':
+        "200":
           description: Профиль покупателя
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/BuyerResponse' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
+              schema: { $ref: "#/components/schemas/BuyerResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
     patch:
       tags: [Buyer]
       summary: Частичное обновление профиля
@@ -152,21 +152,21 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/BuyerUpdateRequest' }
+            schema: { $ref: "#/components/schemas/BuyerUpdateRequest" }
       responses:
-        '200':
+        "200":
           description: Обновлённый профиль
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/BuyerResponse' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
+              schema: { $ref: "#/components/schemas/BuyerResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
     delete:
       tags: [Buyer]
       summary: Soft-delete аккаунта
       responses:
-        '204': { description: Удалён }
-        '401': { $ref: '#/components/responses/Unauthorized' }
+        "204": { description: Удалён }
+        "401": { $ref: "#/components/responses/Unauthorized" }
 
   # -------------------- ADDRESSES --------------------
   /api/v1/buyers/me/addresses:
@@ -174,14 +174,14 @@ paths:
       tags: [Addresses]
       summary: Список адресов покупателя
       responses:
-        '200':
+        "200":
           description: Адреса
           content:
             application/json:
               schema:
                 type: array
-                items: { $ref: '#/components/schemas/AddressResponse' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
+                items: { $ref: "#/components/schemas/AddressResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
     post:
       tags: [Addresses]
       summary: Добавить адрес
@@ -189,18 +189,18 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/AddressCreateRequest' }
+            schema: { $ref: "#/components/schemas/AddressCreateRequest" }
       responses:
-        '201':
+        "201":
           description: Создан
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/AddressResponse' }
-        '400': { $ref: '#/components/responses/BadRequest' }
+              schema: { $ref: "#/components/schemas/AddressResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
 
   /api/v1/buyers/me/addresses/{address_id}:
     parameters:
-      - $ref: '#/components/parameters/AddressId'
+      - $ref: "#/components/parameters/AddressId"
     patch:
       tags: [Addresses]
       summary: Изменить адрес
@@ -208,20 +208,20 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/AddressUpdateRequest' }
+            schema: { $ref: "#/components/schemas/AddressUpdateRequest" }
       responses:
-        '200':
+        "200":
           description: Обновлён
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/AddressResponse' }
-        '404': { $ref: '#/components/responses/NotFound' }
+              schema: { $ref: "#/components/schemas/AddressResponse" }
+        "404": { $ref: "#/components/responses/NotFound" }
     delete:
       tags: [Addresses]
       summary: Удалить адрес
       responses:
-        '204': { description: Удалён }
-        '404': { $ref: '#/components/responses/NotFound' }
+        "204": { description: Удалён }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   # -------------------- PAYMENT METHODS (mock) --------------------
   /api/v1/buyers/me/payment-methods:
@@ -229,13 +229,13 @@ paths:
       tags: [PaymentMethods]
       summary: Платёжные методы покупателя
       responses:
-        '200':
+        "200":
           description: Список
           content:
             application/json:
               schema:
                 type: array
-                items: { $ref: '#/components/schemas/PaymentMethodResponse' }
+                items: { $ref: "#/components/schemas/PaymentMethodResponse" }
     post:
       tags: [PaymentMethods]
       summary: Добавить платёжный метод (мок)
@@ -243,23 +243,23 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/PaymentMethodCreateRequest' }
+            schema: { $ref: "#/components/schemas/PaymentMethodCreateRequest" }
       responses:
-        '201':
+        "201":
           description: Создан
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/PaymentMethodResponse' }
+              schema: { $ref: "#/components/schemas/PaymentMethodResponse" }
 
   /api/v1/buyers/me/payment-methods/{method_id}:
     parameters:
-      - $ref: '#/components/parameters/PaymentMethodId'
+      - $ref: "#/components/parameters/PaymentMethodId"
     delete:
       tags: [PaymentMethods]
       summary: Удалить платёжный метод
       responses:
-        '204': { description: Удалён }
-        '404': { $ref: '#/components/responses/NotFound' }
+        "204": { description: Удалён }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   # -------------------- CATALOG (proxy из B2B) --------------------
   /api/v1/catalog/categories:
@@ -268,13 +268,13 @@ paths:
       summary: Список категорий (плоский)
       security: []
       responses:
-        '200':
+        "200":
           description: Категории
           content:
             application/json:
               schema:
                 type: array
-                items: { $ref: '#/components/schemas/CategoryRef' }
+                items: { $ref: "#/components/schemas/CategoryRef" }
 
   /api/v1/catalog/categories/tree:
     get:
@@ -282,13 +282,13 @@ paths:
       summary: Дерево категорий
       security: []
       responses:
-        '200':
+        "200":
           description: Дерево
           content:
             application/json:
               schema:
                 type: array
-                items: { $ref: '#/components/schemas/CategoryTreeNode' }
+                items: { $ref: "#/components/schemas/CategoryTreeNode" }
 
   /api/v1/catalog/products:
     get:
@@ -301,8 +301,8 @@ paths:
         `?filter[price_min]=10000&filter[price_max]=50000&filter[category_id]=...`
       security: []
       parameters:
-        - $ref: '#/components/parameters/LimitParam'
-        - $ref: '#/components/parameters/OffsetParam'
+        - $ref: "#/components/parameters/LimitParam"
+        - $ref: "#/components/parameters/OffsetParam"
         - name: q
           in: query
           schema: { type: string, maxLength: 200 }
@@ -318,32 +318,32 @@ paths:
           style: deepObject
           explode: true
           schema:
-            $ref: '#/components/schemas/CatalogFilter'
+            $ref: "#/components/schemas/CatalogFilter"
       responses:
-        '200':
+        "200":
           description: Страница товаров
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/PaginatedCatalogProducts' }
+              schema: { $ref: "#/components/schemas/PaginatedCatalogProducts" }
 
   /api/v1/catalog/products/{product_id}:
     parameters:
-      - $ref: '#/components/parameters/ProductId'
+      - $ref: "#/components/parameters/ProductId"
     get:
       tags: [Catalog]
       summary: Карточка товара (публичная)
       security: []
       responses:
-        '200':
+        "200":
           description: Товар
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/CatalogProductDetail' }
-        '404': { $ref: '#/components/responses/NotFound' }
+              schema: { $ref: "#/components/schemas/CatalogProductDetail" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   /api/v1/catalog/products/{product_id}/similar:
     parameters:
-      - $ref: '#/components/parameters/ProductId'
+      - $ref: "#/components/parameters/ProductId"
     get:
       tags: [Catalog]
       summary: Похожие товары
@@ -353,13 +353,13 @@ paths:
           in: query
           schema: { type: integer, minimum: 1, maximum: 50, default: 10 }
       responses:
-        '200':
+        "200":
           description: Список
           content:
             application/json:
               schema:
                 type: array
-                items: { $ref: '#/components/schemas/CatalogProductCard' }
+                items: { $ref: "#/components/schemas/CatalogProductCard" }
 
   /api/v1/catalog/banners:
     get:
@@ -367,13 +367,13 @@ paths:
       summary: Активные баннеры главной
       security: []
       responses:
-        '200':
+        "200":
           description: Баннеры
           content:
             application/json:
               schema:
                 type: array
-                items: { $ref: '#/components/schemas/Banner' }
+                items: { $ref: "#/components/schemas/Banner" }
 
   /api/v1/catalog/collections:
     get:
@@ -381,13 +381,13 @@ paths:
       summary: Подборки товаров (например "Хиты недели")
       security: []
       responses:
-        '200':
+        "200":
           description: Подборки
           content:
             application/json:
               schema:
                 type: array
-                items: { $ref: '#/components/schemas/Collection' }
+                items: { $ref: "#/components/schemas/Collection" }
 
   # -------------------- CART --------------------
   /api/v1/cart:
@@ -403,13 +403,13 @@ paths:
         - bearerAuth: []
         - {}
       parameters:
-        - $ref: '#/components/parameters/SessionIdOptional'
+        - $ref: "#/components/parameters/SessionIdOptional"
       responses:
-        '200':
+        "200":
           description: Состояние корзины
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/CartResponse' }
+              schema: { $ref: "#/components/schemas/CartResponse" }
 
     delete:
       tags: [Cart]
@@ -418,9 +418,9 @@ paths:
         - bearerAuth: []
         - {}
       parameters:
-        - $ref: '#/components/parameters/SessionIdOptional'
+        - $ref: "#/components/parameters/SessionIdOptional"
       responses:
-        '204': { description: Очищена }
+        "204": { description: Очищена }
 
   /api/v1/cart/items:
     post:
@@ -430,34 +430,34 @@ paths:
         - bearerAuth: []
         - {}
       parameters:
-        - $ref: '#/components/parameters/SessionIdOptional'
+        - $ref: "#/components/parameters/SessionIdOptional"
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/CartItemAddRequest' }
+            schema: { $ref: "#/components/schemas/CartItemAddRequest" }
       responses:
-        '200':
+        "200":
           description: Обновлённая корзина
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/CartResponse' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '404':
+              schema: { $ref: "#/components/schemas/CartResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404":
           description: SKU не найден или товар недоступен
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Error' }
-        '409':
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
           description: Недостаточно остатков
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Error' }
+              schema: { $ref: "#/components/schemas/Error" }
 
   /api/v1/cart/items/{sku_id}:
     parameters:
-      - $ref: '#/components/parameters/SkuId'
-      - $ref: '#/components/parameters/SessionIdOptional'
+      - $ref: "#/components/parameters/SkuId"
+      - $ref: "#/components/parameters/SessionIdOptional"
     patch:
       tags: [Cart]
       summary: Изменить количество SKU в корзине
@@ -477,16 +477,16 @@ paths:
                   minimum: 1
                   description: Если требуется удалить — используйте DELETE
       responses:
-        '200':
+        "200":
           description: Обновлённая корзина
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/CartResponse' }
-        '409':
+              schema: { $ref: "#/components/schemas/CartResponse" }
+        "409":
           description: Недостаточно остатков
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Error' }
+              schema: { $ref: "#/components/schemas/Error" }
     delete:
       tags: [Cart]
       summary: Удалить SKU из корзины
@@ -494,11 +494,11 @@ paths:
         - bearerAuth: []
         - {}
       responses:
-        '200':
+        "200":
           description: Обновлённая корзина
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/CartResponse' }
+              schema: { $ref: "#/components/schemas/CartResponse" }
 
   /api/v1/cart/validate:
     post:
@@ -512,13 +512,13 @@ paths:
         - bearerAuth: []
         - {}
       parameters:
-        - $ref: '#/components/parameters/SessionIdOptional'
+        - $ref: "#/components/parameters/SessionIdOptional"
       responses:
-        '200':
+        "200":
           description: Результат валидации
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/CartValidationResponse' }
+              schema: { $ref: "#/components/schemas/CartValidationResponse" }
 
   /api/v1/cart/merge:
     post:
@@ -529,14 +529,14 @@ paths:
         но эндпоинт оставлен для случаев, когда клиент авторизуется отдельно.
         Правило слияния: для каждой пары (sku_id) берётся max(quantity).
       parameters:
-        - $ref: '#/components/parameters/SessionIdRequired'
+        - $ref: "#/components/parameters/SessionIdRequired"
       responses:
-        '200':
+        "200":
           description: Слитая корзина
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/CartResponse' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
+              schema: { $ref: "#/components/schemas/CartResponse" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
 
   # -------------------- FAVORITES --------------------
   /api/v1/favorites:
@@ -544,34 +544,34 @@ paths:
       tags: [Favorites]
       summary: Избранные товары
       parameters:
-        - $ref: '#/components/parameters/LimitParam'
-        - $ref: '#/components/parameters/OffsetParam'
+        - $ref: "#/components/parameters/LimitParam"
+        - $ref: "#/components/parameters/OffsetParam"
       responses:
-        '200':
+        "200":
           description: Список
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/PaginatedCatalogProducts' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
+              schema: { $ref: "#/components/schemas/PaginatedCatalogProducts" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
 
   /api/v1/favorites/{product_id}:
     parameters:
-      - $ref: '#/components/parameters/ProductId'
+      - $ref: "#/components/parameters/ProductId"
     put:
       tags: [Favorites]
       summary: Добавить товар в избранное (идемпотентно)
       responses:
-        '204': { description: Добавлен }
-        '404': { $ref: '#/components/responses/NotFound' }
+        "204": { description: Добавлен }
+        "404": { $ref: "#/components/responses/NotFound" }
     delete:
       tags: [Favorites]
       summary: Удалить из избранного
       responses:
-        '204': { description: Удалён }
+        "204": { description: Удалён }
 
   /api/v1/favorites/{product_id}/subscribe:
     parameters:
-      - $ref: '#/components/parameters/ProductId'
+      - $ref: "#/components/parameters/ProductId"
     post:
       tags: [Favorites]
       summary: Подписаться на уведомления о товаре
@@ -592,12 +592,12 @@ paths:
                     enum: [BACK_IN_STOCK, PRICE_DROP]
                   default: [BACK_IN_STOCK, PRICE_DROP]
       responses:
-        '204': { description: Подписан }
+        "204": { description: Подписан }
     delete:
       tags: [Favorites]
       summary: Отписаться
       responses:
-        '204': { description: Отписан }
+        "204": { description: Отписан }
 
   # -------------------- ORDERS --------------------
   /api/v1/orders:
@@ -605,20 +605,29 @@ paths:
       tags: [Orders]
       summary: История заказов покупателя
       parameters:
-        - $ref: '#/components/parameters/LimitParam'
-        - $ref: '#/components/parameters/OffsetParam'
+        - $ref: "#/components/parameters/LimitParam"
+        - $ref: "#/components/parameters/OffsetParam"
         - name: status
           in: query
           schema:
             type: string
-            enum: [CREATED, PAID, ASSEMBLING, DELIVERING, DELIVERED, CANCELLED, CANCEL_PENDING]
+            enum:
+              [
+                CREATED,
+                PAID,
+                ASSEMBLING,
+                DELIVERING,
+                DELIVERED,
+                CANCELLED,
+                CANCEL_PENDING,
+              ]
       responses:
-        '200':
+        "200":
           description: Страница заказов
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/PaginatedOrders' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
+              schema: { $ref: "#/components/schemas/PaginatedOrders" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
 
     post:
       tags: [Orders]
@@ -629,7 +638,7 @@ paths:
         2. Резерв SKU в B2B (с тем же idempotency_key).
         3. Мок-оплата → статус сразу PAID.
         4. Цены в OrderItem фиксируются на момент создания.
-        
+
         Заголовок Idempotency-Key обязателен. TTL ключа — 1 час.
         Повторный запрос с тем же ключом и тем же телом вернёт уже созданный заказ.
         При несовпадении тела — 409.
@@ -644,45 +653,45 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/OrderCreateRequest' }
+            schema: { $ref: "#/components/schemas/OrderCreateRequest" }
       responses:
-        '201':
+        "201":
           description: Заказ создан
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/OrderResponse' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '409':
+              schema: { $ref: "#/components/schemas/OrderResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
           description: |
             Конфликт: либо несовпадение тела с уже использованным idempotency_key,
             либо не удалось зарезервировать остатки.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Error' }
-        '422':
+              schema: { $ref: "#/components/schemas/Error" }
+        "422":
           description: Корзина невалидна (см. /cart/validate)
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/CartValidationResponse' }
+              schema: { $ref: "#/components/schemas/CartValidationResponse" }
 
   /api/v1/orders/{order_id}:
     parameters:
-      - $ref: '#/components/parameters/OrderId'
+      - $ref: "#/components/parameters/OrderId"
     get:
       tags: [Orders]
       summary: Карточка заказа
       responses:
-        '200':
+        "200":
           description: Заказ
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/OrderResponse' }
-        '404': { $ref: '#/components/responses/NotFound' }
+              schema: { $ref: "#/components/schemas/OrderResponse" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   /api/v1/orders/{order_id}/cancel:
     parameters:
-      - $ref: '#/components/parameters/OrderId'
+      - $ref: "#/components/parameters/OrderId"
     post:
       tags: [Orders]
       summary: Отменить заказ
@@ -704,16 +713,16 @@ paths:
                   type: string
                   maxLength: 500
       responses:
-        '200':
+        "200":
           description: Заказ перешёл в CANCELLED или CANCEL_PENDING
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/OrderResponse' }
-        '409':
+              schema: { $ref: "#/components/schemas/OrderResponse" }
+        "409":
           description: Статус не допускает отмену
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Error' }
+              schema: { $ref: "#/components/schemas/Error" }
 
   # -------------------- NOTIFICATIONS --------------------
   /api/v1/notifications:
@@ -721,17 +730,17 @@ paths:
       tags: [Notifications]
       summary: Лента уведомлений
       parameters:
-        - $ref: '#/components/parameters/LimitParam'
-        - $ref: '#/components/parameters/OffsetParam'
+        - $ref: "#/components/parameters/LimitParam"
+        - $ref: "#/components/parameters/OffsetParam"
         - name: unread_only
           in: query
           schema: { type: boolean, default: false }
       responses:
-        '200':
+        "200":
           description: Уведомления
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/PaginatedNotifications' }
+              schema: { $ref: "#/components/schemas/PaginatedNotifications" }
 
   /api/v1/notifications/{notification_id}/read:
     parameters:
@@ -743,7 +752,7 @@ paths:
       tags: [Notifications]
       summary: Отметить уведомление как прочитанное
       responses:
-        '204': { description: ОК }
+        "204": { description: ОК }
 
   # -------------------- B2B EVENTS (служебный канал) --------------------
   /api/v1/b2b/events:
@@ -761,16 +770,16 @@ paths:
         Идемпотентность по polю idempotency_key (TTL 24 часа).
       security: []
       parameters:
-        - $ref: '#/components/parameters/ServiceKey'
+        - $ref: "#/components/parameters/ServiceKey"
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/B2BEvent' }
+            schema: { $ref: "#/components/schemas/B2BEvent" }
       responses:
-        '202': { description: Принято в обработку }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '409':
+        "202": { description: Принято в обработку }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
           description: Дубликат события (idempotency_key уже использован)
 
 components:
@@ -839,22 +848,22 @@ components:
       description: Невалидный запрос
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/Error' }
+          schema: { $ref: "#/components/schemas/Error" }
     Unauthorized:
       description: Не авторизован
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/Error' }
+          schema: { $ref: "#/components/schemas/Error" }
     Forbidden:
       description: Нет прав
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/Error' }
+          schema: { $ref: "#/components/schemas/Error" }
     NotFound:
       description: Не найдено
       content:
         application/json:
-          schema: { $ref: '#/components/schemas/Error' }
+          schema: { $ref: "#/components/schemas/Error" }
 
   schemas:
     # -------- Базовые --------
@@ -879,7 +888,8 @@ components:
         access_token: { type: string }
         refresh_token: { type: string }
         token_type: { type: string, default: Bearer }
-        expires_in: { type: integer, description: TTL access-токена, сек }
+        expires_in:
+          { type: integer, description: "TTL access-токена в секундах" }
         user_id: { type: string, format: uuid }
 
     LoginRequest:
@@ -895,7 +905,8 @@ components:
       required: [email, password, first_name]
       properties:
         email: { type: string, format: email }
-        password: { type: string, format: password, minLength: 8, maxLength: 128 }
+        password:
+          { type: string, format: password, minLength: 8, maxLength: 128 }
         first_name: { type: string, minLength: 1, maxLength: 100 }
         last_name: { type: string, maxLength: 100 }
         phone:
@@ -943,11 +954,11 @@ components:
 
     AddressUpdateRequest:
       allOf:
-        - $ref: '#/components/schemas/AddressCreateRequest'
+        - $ref: "#/components/schemas/AddressCreateRequest"
 
     AddressResponse:
       allOf:
-        - $ref: '#/components/schemas/AddressCreateRequest'
+        - $ref: "#/components/schemas/AddressCreateRequest"
         - type: object
           required: [id, created_at]
           properties:
@@ -964,7 +975,7 @@ components:
           enum: [CARD, SBP, WALLET]
         card_last4:
           type: string
-          pattern: '^[0-9]{4}$'
+          pattern: "^[0-9]{4}$"
           description: Только для type=CARD
         card_brand:
           type: string
@@ -973,7 +984,7 @@ components:
 
     PaymentMethodResponse:
       allOf:
-        - $ref: '#/components/schemas/PaymentMethodCreateRequest'
+        - $ref: "#/components/schemas/PaymentMethodCreateRequest"
         - type: object
           required: [id, created_at]
           properties:
@@ -996,19 +1007,24 @@ components:
 
     CategoryTreeNode:
       allOf:
-        - $ref: '#/components/schemas/CategoryRef'
+        - $ref: "#/components/schemas/CategoryRef"
         - type: object
           properties:
             children:
               type: array
-              items: { $ref: '#/components/schemas/CategoryTreeNode' }
+              items: { $ref: "#/components/schemas/CategoryTreeNode" }
 
     # -------- Каталог --------
     CatalogFilter:
       type: object
       properties:
         category_id: { type: string, format: uuid }
-        price_min: { type: integer, minimum: 0, description: Минимальная цена в копейках }
+        price_min:
+          {
+            type: integer,
+            minimum: 0,
+            description: Минимальная цена в копейках,
+          }
         price_max: { type: integer, minimum: 0 }
         seller_id: { type: string, format: uuid }
         attributes:
@@ -1026,7 +1042,7 @@ components:
         id: { type: string, format: uuid }
         name: { type: string }
         slug: { type: string }
-        category: { $ref: '#/components/schemas/CategoryRef' }
+        category: { $ref: "#/components/schemas/CategoryRef" }
         min_price:
           type: integer
           description: Минимальная цена среди доступных SKU, копейки
@@ -1044,7 +1060,7 @@ components:
         reviews_count: { type: integer, minimum: 0 }
         images:
           type: array
-          items: { $ref: '#/components/schemas/ImageRef' }
+          items: { $ref: "#/components/schemas/ImageRef" }
         seller:
           type: object
           properties:
@@ -1053,7 +1069,7 @@ components:
 
     CatalogProductDetail:
       allOf:
-        - $ref: '#/components/schemas/CatalogProductCard'
+        - $ref: "#/components/schemas/CatalogProductCard"
         - type: object
           required: [description, skus]
           properties:
@@ -1063,7 +1079,7 @@ components:
               additionalProperties: true
             skus:
               type: array
-              items: { $ref: '#/components/schemas/CatalogSku' }
+              items: { $ref: "#/components/schemas/CatalogSku" }
 
     CatalogSku:
       type: object
@@ -1083,7 +1099,7 @@ components:
           additionalProperties: true
         images:
           type: array
-          items: { $ref: '#/components/schemas/ImageRef' }
+          items: { $ref: "#/components/schemas/ImageRef" }
 
     ImageRef:
       type: object
@@ -1101,7 +1117,7 @@ components:
       properties:
         items:
           type: array
-          items: { $ref: '#/components/schemas/CatalogProductCard' }
+          items: { $ref: "#/components/schemas/CatalogProductCard" }
         total_count: { type: integer }
         limit: { type: integer }
         offset: { type: integer }
@@ -1127,7 +1143,7 @@ components:
         description: { type: string }
         products:
           type: array
-          items: { $ref: '#/components/schemas/CatalogProductCard' }
+          items: { $ref: "#/components/schemas/CatalogProductCard" }
 
     # -------- Корзина --------
     CartItemAddRequest:
@@ -1139,7 +1155,17 @@ components:
 
     CartItem:
       type: object
-      required: [sku_id, product_id, name, quantity, unit_price, line_total, available_quantity, is_available]
+      required:
+        [
+          sku_id,
+          product_id,
+          name,
+          quantity,
+          unit_price,
+          line_total,
+          available_quantity,
+          is_available,
+        ]
       properties:
         sku_id: { type: string, format: uuid }
         product_id: { type: string, format: uuid }
@@ -1161,7 +1187,7 @@ components:
           type: boolean
           description: false если товар BLOCKED/удалён/нет остатка
         image:
-          $ref: '#/components/schemas/ImageRef'
+          $ref: "#/components/schemas/ImageRef"
 
     CartResponse:
       type: object
@@ -1170,7 +1196,7 @@ components:
         id: { type: string, format: uuid, description: ID корзины (или сессии) }
         items:
           type: array
-          items: { $ref: '#/components/schemas/CartItem' }
+          items: { $ref: "#/components/schemas/CartItem" }
         items_count:
           type: integer
           description: Сумма quantity по всем строкам
@@ -1206,10 +1232,10 @@ components:
       required: [is_valid, cart, issues]
       properties:
         is_valid: { type: boolean }
-        cart: { $ref: '#/components/schemas/CartResponse' }
+        cart: { $ref: "#/components/schemas/CartResponse" }
         issues:
           type: array
-          items: { $ref: '#/components/schemas/CartValidationIssue' }
+          items: { $ref: "#/components/schemas/CartValidationIssue" }
 
     # -------- Заказы --------
     OrderCreateRequest:
@@ -1252,7 +1278,8 @@ components:
 
     OrderResponse:
       type: object
-      required: [id, buyer_id, status, items, subtotal, total, address, created_at]
+      required:
+        [id, buyer_id, status, items, subtotal, total, address, created_at]
       properties:
         id: { type: string, format: uuid }
         number:
@@ -1261,7 +1288,16 @@ components:
         buyer_id: { type: string, format: uuid }
         status:
           type: string
-          enum: [CREATED, PAID, ASSEMBLING, DELIVERING, DELIVERED, CANCELLED, CANCEL_PENDING]
+          enum:
+            [
+              CREATED,
+              PAID,
+              ASSEMBLING,
+              DELIVERING,
+              DELIVERED,
+              CANCELLED,
+              CANCEL_PENDING,
+            ]
         status_history:
           type: array
           items:
@@ -1272,12 +1308,12 @@ components:
               reason: { type: string, nullable: true }
         items:
           type: array
-          items: { $ref: '#/components/schemas/OrderItem' }
-        subtotal: { type: integer, description: Сумма по позициям, копейки }
+          items: { $ref: "#/components/schemas/OrderItem" }
+        subtotal: { type: integer, description: "Сумма по позициям, копейки" }
         delivery_cost: { type: integer, default: 0 }
         total: { type: integer, description: subtotal + delivery_cost }
-        address: { $ref: '#/components/schemas/AddressResponse' }
-        payment_method: { $ref: '#/components/schemas/PaymentMethodResponse' }
+        address: { $ref: "#/components/schemas/AddressResponse" }
+        payment_method: { $ref: "#/components/schemas/PaymentMethodResponse" }
         comment: { type: string, nullable: true }
         cancel_reason: { type: string, nullable: true }
         created_at: { type: string, format: date-time }
@@ -1290,7 +1326,7 @@ components:
       properties:
         items:
           type: array
-          items: { $ref: '#/components/schemas/OrderResponse' }
+          items: { $ref: "#/components/schemas/OrderResponse" }
         total_count: { type: integer }
         limit: { type: integer }
         offset: { type: integer }
@@ -1324,7 +1360,7 @@ components:
       properties:
         items:
           type: array
-          items: { $ref: '#/components/schemas/Notification' }
+          items: { $ref: "#/components/schemas/Notification" }
         total_count: { type: integer }
         unread_count: { type: integer }
         limit: { type: integer }
@@ -1348,9 +1384,9 @@ components:
         occurred_at: { type: string, format: date-time }
         payload:
           oneOf:
-            - $ref: '#/components/schemas/EventProductRef'
-            - $ref: '#/components/schemas/EventSkuStock'
-            - $ref: '#/components/schemas/EventPriceChanged'
+            - $ref: "#/components/schemas/EventProductRef"
+            - $ref: "#/components/schemas/EventSkuStock"
+            - $ref: "#/components/schemas/EventPriceChanged"
 
     EventProductRef:
       type: object

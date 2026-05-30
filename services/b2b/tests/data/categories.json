@@ -1,297 +1,242 @@
 {
   "categories": [
     {
-      "name": "📰 Новостные каналы",
-      "slug": "news-channels",
-      "sort_order": 1,
-      "description": "Оперативные новости, аналитика, сводки",
+      "name": "Новостные каналы",
       "children": [
         {
           "name": "Политические новости",
-          "slug": "political-news",
-          "description": "Внутренняя и внешняя политика, геополитика",
           "children": [
-            {"name": "Кремлёвские сводки", "slug": "kremlin-reports"},
-            {"name": "Международная аналитика", "slug": "international-analytics"},
-            {"name": "Региональные новости", "slug": "regional-news"},
-            {"name": "Оппозиционные взгляды", "slug": "opposition-views"}
+            {"name": "Кремлёвские сводки"},
+            {"name": "Международная аналитика"},
+            {"name": "Региональные новости"},
+            {"name": "Оппозиционные взгляды"}
           ]
         },
         {
           "name": "Экономика и финансы",
-          "slug": "economy-finance",
-          "description": "Курсы валют, инвестиции, бизнес-аналитика",
           "children": [
-            {"name": "Макроэкономика", "slug": "macroeconomics"},
-            {"name": "Криптовалюты", "slug": "cryptocurrency"},
-            {"name": "Фондовый рынок", "slug": "stock-market"},
-            {"name": "Бизнес-аналитика", "slug": "business-analytics"}
+            {"name": "Макроэкономика"},
+            {"name": "Криптовалюты"},
+            {"name": "Фондовый рынок"},
+            {"name": "Бизнес-аналитика"}
           ]
         },
         {
           "name": "Технологии и IT",
-          "slug": "tech-it",
-          "description": "Айти новости, релизы, обзоры",
           "children": [
-            {"name": "AI и нейросети", "slug": "ai-news"},
-            {"name": "Кибербезопасность", "slug": "cybersecurity"},
-            {"name": "Разработка ПО", "slug": "software-dev"},
-            {"name": "Гаджеты и девайсы", "slug": "gadgets"}
+            {"name": "AI и нейросети"},
+            {"name": "Кибербезопасность"},
+            {"name": "Разработка ПО"},
+            {"name": "Гаджеты и девайсы"}
           ]
         },
         {
           "name": "Мир и общество",
-          "slug": "world-society",
-          "description": "Социальные темы, культура, происшествия",
           "children": [
-            {"name": "Происшествия", "slug": "incidents"},
-            {"name": "Экология", "slug": "ecology"},
-            {"name": "Права человека", "slug": "human-rights"},
-            {"name": "Демография", "slug": "demographics"}
+            {"name": "Происшествия"},
+            {"name": "Экология"},
+            {"name": "Права человека"},
+            {"name": "Демография"}
           ]
         }
       ]
     },
     {
-      "name": "📚 Образовательные каналы",
-      "slug": "educational-channels",
-      "sort_order": 2,
-      "description": "Обучение, курсы, полезные материалы",
+      "name": "Образовательные каналы",
       "children": [
         {
           "name": "Иностранные языки",
-          "slug": "languages",
-          "description": "Английский, китайский, европейские языки",
           "children": [
-            {"name": "Английский язык", "slug": "english"},
-            {"name": "Китайский язык", "slug": "chinese"},
-            {"name": "Европейские языки", "slug": "european-languages"},
-            {"name": "Разговорные клубы", "slug": "speaking-clubs"}
+            {"name": "Английский язык"},
+            {"name": "Китайский язык"},
+            {"name": "Европейские языки"},
+            {"name": "Разговорные клубы"}
           ]
         },
         {
           "name": "Программирование",
-          "slug": "programming",
-          "description": "Курсы по coding, алгоритмы, фреймворки",
           "children": [
-            {"name": "Python", "slug": "python"},
-            {"name": "JavaScript/TypeScript", "slug": "javascript"},
-            {"name": "Java/Kotlin", "slug": "java-kotlin"},
-            {"name": "Go/Rust", "slug": "go-rust"},
-            {"name": "Data Science", "slug": "data-science"}
+            {"name": "Python"},
+            {"name": "JavaScript/TypeScript"},
+            {"name": "Java/Kotlin"},
+            {"name": "Go/Rust"},
+            {"name": "Data Science"}
           ]
         },
         {
           "name": "Бизнес и маркетинг",
-          "slug": "business-marketing",
-          "description": "Предпринимательство, продажи, SMM",
           "children": [
-            {"name": "Стартапы", "slug": "startups"},
-            {"name": "Маркетинг", "slug": "marketing"},
-            {"name": "Продажи", "slug": "sales"},
-            {"name": "Управление", "slug": "management"}
+            {"name": "Стартапы"},
+            {"name": "Маркетинг"},
+            {"name": "Продажи"},
+            {"name": "Управление"}
           ]
         },
         {
           "name": "Саморазвитие",
-          "slug": "self-development",
-          "description": "Психология, продуктивность, soft skills",
           "children": [
-            {"name": "Психология", "slug": "psychology"},
-            {"name": "Продуктивность", "slug": "productivity"},
-            {"name": "Soft skills", "slug": "soft-skills"},
-            {"name": "Карьерный рост", "slug": "career-growth"}
+            {"name": "Психология"},
+            {"name": "Продуктивность"},
+            {"name": "Soft skills"},
+            {"name": "Карьерный рост"}
           ]
         }
       ]
     },
     {
-      "name": "🎨 Творческие каналы",
-      "slug": "creative-channels",
-      "sort_order": 3,
-      "description": "Искусство, дизайн, фотография, музыка",
+      "name": "Творческие каналы",
       "children": [
         {
           "name": "Дизайн и графика",
-          "slug": "design-graphics",
           "children": [
-            {"name": "UI/UX дизайн", "slug": "ui-ux-design"},
-            {"name": "Графический дизайн", "slug": "graphic-design"},
-            {"name": "Motion design", "slug": "motion-design"},
-            {"name": "3D моделирование", "slug": "3d-modeling"}
+            {"name": "UI/UX дизайн"},
+            {"name": "Графический дизайн"},
+            {"name": "Motion design"},
+            {"name": "3D моделирование"}
           ]
         },
         {
           "name": "Фотография и видео",
-          "slug": "photo-video",
           "children": [
-            {"name": "Фотография", "slug": "photography"},
-            {"name": "Видеомонтаж", "slug": "video-editing"},
-            {"name": "Color grading", "slug": "color-grading"},
-            {"name": "Дроны", "slug": "drones"}
+            {"name": "Фотография"},
+            {"name": "Видеомонтаж"},
+            {"name": "Color grading"},
+            {"name": "Дроны"}
           ]
         },
         {
           "name": "Музыка",
-          "slug": "music",
           "children": [
-            {"name": "Музыкальные новости", "slug": "music-news"},
-            {"name": "Создание музыки", "slug": "music-production"},
-            {"name": "Инди-музыканты", "slug": "indie-musicians"},
-            {"name": "Классика", "slug": "classical-music"}
+            {"name": "Музыкальные новости"},
+            {"name": "Создание музыки"},
+            {"name": "Инди-музыканты"},
+            {"name": "Классика"}
           ]
         },
         {
           "name": "Литература",
-          "slug": "literature",
           "children": [
-            {"name": "Книжные рекомендации", "slug": "book-recommendations"},
-            {"name": "Писательство", "slug": "writing"},
-            {"name": "Поэзия", "slug": "poetry"},
-            {"name": "Самиздат", "slug": "samizdat"}
+            {"name": "Книжные рекомендации"},
+            {"name": "Писательство"},
+            {"name": "Поэзия"},
+            {"name": "Самиздат"}
           ]
         }
       ]
     },
     {
-      "name": "👤 Индивидуальные авторы",
-      "slug": "individual-authors",
-      "sort_order": 4,
-      "description": "Личные блоги, мнения, экспертные взгляды",
+      "name": "Индивидуальные авторы",
       "children": [
         {
           "name": "Политические обозреватели",
-          "slug": "political-commentators",
           "children": [
-            {"name": "Провластные", "slug": "pro-government"},
-            {"name": "Оппозиционные", "slug": "opposition"},
-            {"name": "Либеральные", "slug": "liberal"},
-            {"name": "Патриотические", "slug": "patriotic"}
+            {"name": "Провластные"},
+            {"name": "Оппозиционные"},
+            {"name": "Либеральные"},
+            {"name": "Патриотические"}
           ]
         },
         {
           "name": "Бизнес-эксперты",
-          "slug": "business-experts",
           "children": [
-            {"name": "Инвесторы", "slug": "investors"},
-            {"name": "Предприниматели", "slug": "entrepreneurs"},
-            {"name": "Маркетологи", "slug": "marketers"},
-            {"name": "HR-специалисты", "slug": "hr-specialists"}
+            {"name": "Инвесторы"},
+            {"name": "Предприниматели"},
+            {"name": "Маркетологи"},
+            {"name": "HR-специалисты"}
           ]
         },
         {
           "name": "IT-специалисты",
-          "slug": "it-professionals",
           "children": [
-            {"name": "Разработчики", "slug": "developers"},
-            {"name": "DevOps инженеры", "slug": "devops-engineers"},
-            {"name": "Аналитики данных", "slug": "data-analysts"},
-            {"name": "Security эксперты", "slug": "security-experts"}
+            {"name": "Разработчики"},
+            {"name": "DevOps инженеры"},
+            {"name": "Аналитики данных"},
+            {"name": "Security эксперты"}
           ]
         },
         {
           "name": "Лайфстайл блогеры",
-          "slug": "lifestyle-bloggers",
           "children": [
-            {"name": "Путешествия", "slug": "travel"},
-            {"name": "Кулинария", "slug": "cooking"},
-            {"name": "Спорт и фитнес", "slug": "sports-fitness"},
-            {"name": "Мода и стиль", "slug": "fashion-style"}
+            {"name": "Путешествия"},
+            {"name": "Кулинария"},
+            {"name": "Спорт и фитнес"},
+            {"name": "Мода и стиль"}
           ]
         }
       ]
     },
     {
-      "name": "🔥 Эксклюзивный контент",
-      "slug": "exclusive-content",
-      "sort_order": 5,
-      "description": "VIP-каналы, закрытые сообщества, премиум",
+      "name": "Эксклюзивный контент",
       "children": [
         {
           "name": "Закрытые клубы",
-          "slug": "closed-clubs",
           "children": [
-            {"name": "Бизнес-клубы", "slug": "business-clubs"},
-            {"name": "Инвестиционные клубы", "slug": "investment-clubs"},
-            {"name": "Клубы по интересам", "slug": "interest-clubs"}
+            {"name": "Бизнес-клубы"},
+            {"name": "Инвестиционные клубы"},
+            {"name": "Клубы по интересам"}
           ]
         },
         {
           "name": "Premium аналитика",
-          "slug": "premium-analytics",
           "children": [
-            {"name": "Финансовые отчёты", "slug": "financial-reports"},
-            {"name": "Рыночные исследования", "slug": "market-research"},
-            {"name": "Прогнозы", "slug": "forecasts"}
+            {"name": "Финансовые отчёты"},
+            {"name": "Рыночные исследования"},
+            {"name": "Прогнозы"}
           ]
         },
         {
           "name": "Мастермайнды",
-          "slug": "masterminds",
           "children": [
-            {"name": "CEO мастермайнды", "slug": "ceo-masterminds"},
-            {"name": "Маркетинг мастермайнды", "slug": "marketing-masterminds"},
-            {"name": "Стартап мастермайнды", "slug": "startup-masterminds"}
+            {"name": "CEO мастермайнды"},
+            {"name": "Маркетинг мастермайнды"},
+            {"name": "Стартап мастермайнды"}
           ]
         }
       ]
     },
     {
-      "name": "🎮 Развлекательные каналы",
-      "slug": "entertainment-channels",
-      "sort_order": 6,
-      "description": "Юмор, мемы, игры, кино",
+      "name": "Развлекательные каналы",
       "children": [
         {
           "name": "Юмор и мемы",
-          "slug": "humor-memes",
           "children": [
-            {"name": "IT юмор", "slug": "it-humor"},
-            {"name": "Политические мемы", "slug": "political-memes"},
-            {"name": "Жизненные", "slug": "life-memes"}
+            {"name": "IT юмор"},
+            {"name": "Политические мемы"},
+            {"name": "Жизненные"}
           ]
         },
         {
           "name": "Игры и гейминг",
-          "slug": "gaming",
           "children": [
-            {"name": "Игровые новости", "slug": "gaming-news"},
-            {"name": "Стримеры", "slug": "streamers"},
-            {"name": "Киберспорт", "slug": "esports"}
+            {"name": "Игровые новости"},
+            {"name": "Стримеры"},
+            {"name": "Киберспорт"}
           ]
         },
         {
           "name": "Кино и сериалы",
-          "slug": "movies-series",
           "children": [
-            {"name": "Новинки кино", "slug": "movie-news"},
-            {"name": "Обзоры сериалов", "slug": "series-reviews"},
-            {"name": "Аниме", "slug": "anime"}
+            {"name": "Новинки кино"},
+            {"name": "Обзоры сериалов"},
+            {"name": "Аниме"}
           ]
         }
       ]
     },
     {
-      "name": "🔞 18+ контент",
-      "slug": "adult-content",
-      "sort_order": 7,
-      "description": "Только для совершеннолетних",
-      "is_restricted": true,
+      "name": "18+ контент",
       "children": [
         {
           "name": "Юмор 18+",
-          "slug": "adult-humor",
-          "is_restricted": true
+          "children": []
         },
         {
           "name": "Откровенные блоги",
-          "slug": "explicit-blogs",
-          "is_restricted": true
+          "children": []
         },
         {
           "name": "Эротика",
-          "slug": "erotica",
-          "is_restricted": true
+          "children": []
         }
       ]
     }

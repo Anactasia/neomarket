@@ -1,49 +1,29 @@
-"""
-Общие Pydantic схемы, переиспользуемые между модулями
-"""
+# app/schemas/common.py
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Union, TypeVar, Generic
 from datetime import datetime
+from enum import Enum
 from uuid import UUID
 
 
 class CategoryRef(BaseModel):
-    """Ссылка на категорию (для Product)"""
+    """Ссылка на категорию (по спецификации B2B)"""
     id: UUID
     name: str
+    parent_id: Optional[UUID] = None
+    level: int
+    path: List[str]
 
 
-class Image(BaseModel):
-    """Изображение товара (для запроса)"""
-    url: str
-    ordering: int = 0
-
-
-class ImageResponse(BaseModel):
-    """Ответ с изображением (по общей спецификации)"""
-    id: UUID                              # ← ДОБАВИТЬ id
-    url: str
-    ordering: int = 0
-
-
-class CharacteristicValue(BaseModel):
-    """Характеристика для запроса (свободные name/value)"""
+class Characteristic(BaseModel):
+    """Характеристика для запроса (по спецификации B2B)"""
     name: str = Field(..., max_length=255)
-    value: str = Field(..., max_length=1000)
+    value: str = Field(..., description="Значение характеристики")
 
 
-class CharacteristicValueResponse(BaseModel):
-    """Характеристика в ответе (по общей спецификации — с id)"""
+class CharacteristicResponse(Characteristic):
+    """Характеристика в ответе (с id, по спецификации B2B)"""
     id: UUID
-    name: str = Field(..., max_length=255)
-    value: str = Field(..., max_length=1000)
-
-
-class Pagination(BaseModel):
-    """Пагинация"""
-    limit: int
-    offset: int
-    total: int
 
 
 class Error(BaseModel):
@@ -53,30 +33,40 @@ class Error(BaseModel):
     details: Optional[dict] = None
 
 
-class SKUInProduct(BaseModel):
-    """SKU внутри Product (для ответа B2C каталог / seller cabinet)"""
-    id: UUID
-    name: str
-    price: int
-    cost_price: int = 0  # Для seller cabinet
-    discount: int = 0
-    image: Optional[str] = None
-    active_quantity: int
-    reserved_quantity: int = 0  # Для seller cabinet
-    characteristics: List[CharacteristicValue] = []  # ← без id (для SKU внутри Product)
-    
-    class Config:
-        from_attributes = True
-
-
 class ProductImageCreate(BaseModel):
-    """Схема для создания изображения товара (POST /products)"""
+    """Схема для создания изображения товара"""
     url: str = Field(..., description="Ссылка на изображение в S3")
     ordering: int = Field(0, ge=0, description="Порядок отображения")
 
 
 class ProductImageResponse(BaseModel):
-    """Ответ с изображением товара (уже с id — оставляем)"""
+    """Ответ с изображением товара"""
     id: UUID
     url: str
     ordering: int
+
+
+class ImageEntityType(str, Enum):
+    PRODUCT = "PRODUCT"
+    SKU = "SKU"
+
+
+class ImageUploadResponse(BaseModel):
+    id: UUID
+    url: str
+    ordering: int
+    entity_type: ImageEntityType
+    entity_id: Optional[UUID] = None
+
+
+# ========== УНИВЕРСАЛЬНАЯ ПАГИНАЦИЯ ==========
+
+T = TypeVar('T')
+
+
+class PaginatedResponse(BaseModel, Generic[T]):
+    """Универсальный пагинированный ответ (по канону)"""
+    items: List[T]
+    total_count: int
+    limit: int
+    offset: int

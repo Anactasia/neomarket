@@ -1,0 +1,61 @@
+name: B2B Tests (без Docker Compose)
+
+on:
+  push:
+    branches: [ main, master, develop, feature/b2b ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: neomarket_b2b
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        working-directory: ./services/b2b
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-cov
+
+      - name: Wait for PostgreSQL
+        run: sleep 10
+
+      - name: Run migrations
+        working-directory: ./services/b2b
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/neomarket_b2b
+        run: |
+          alembic upgrade head
+
+      - name: Run tests
+        working-directory: ./services/b2b
+        env:
+          CI: "true"
+          USE_POSTGRES_FOR_TESTS: "true"
+          DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/neomarket_b2b"
+        run: |
+          pytest tests/ -v --tb=short

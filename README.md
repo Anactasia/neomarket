@@ -20,6 +20,8 @@ curl http://localhost:8000/health
 
 ## Запуск тестов
 ```
+docker-compose exec b2b-service pytest tests/ -v
+
 # Запустить только тесты US-B2B-01
 docker-compose exec b2b-service pytest tests/test_us_b2b_01.py -v
 
@@ -43,6 +45,18 @@ docker-compose exec b2b-service pytest tests/test_us_b2b_07.py -v
 
 # Запустить только тесты US-B2B-08
 docker-compose exec b2b-service pytest tests/test_us_b2b_08.py -v
+
+# Запустить только тесты US-B2B-09
+docker-compose exec b2b-service pytest tests/test_us_b2b_09.py -v
+
+# Запустить только тесты US-B2B-10
+docker-compose exec b2b-service pytest tests/test_us_b2b_10.py -v
+
+# Запустить только тесты US-B2B-11
+docker-compose exec b2b-service pytest tests/test_us_b2b_11.py -v
+
+# Запустить только тесты US-B2B-12
+docker-compose exec b2b-service pytest tests/test_us_b2b_12.py -v
 ```
 
 

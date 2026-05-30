@@ -1,10 +1,15 @@
 """
 Тесты для US-B2B-05: Просмотр карточки товара и причин блокировки
 """
+import os
 import pytest
 from uuid import uuid4
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
+
+# Устанавливаем переменные окружения для тестов
+os.environ["B2C_TO_B2B_KEY"] = "test-b2c-key"
+os.environ["B2B_TO_MOD_KEY"] = "test-mod-key"
 
 from app.main import app
 from app.database import get_db
@@ -15,6 +20,8 @@ from app.models.sku import SKU
 from app.core.security import create_access_token
 from app.schemas.product import ProductStatus
 
+
+# ========== БАЗОВЫЕ ФИКСТУРЫ ==========
 
 @pytest.fixture
 def db_session():
@@ -105,7 +112,6 @@ def test_moderated_product(db_session, test_category, test_seller):
     db_session.add(product)
     db_session.flush()
     
-    # Создаём SKU
     sku = SKU(
         id=uuid4(),
         product_id=product.id,
@@ -158,7 +164,6 @@ def test_blocked_product(db_session, test_category, test_seller):
     db_session.add(product)
     db_session.flush()
     
-    # Создаём SKU
     sku = SKU(
         id=uuid4(),
         product_id=product.id,
@@ -216,13 +221,15 @@ def test_other_seller_product(db_session, test_category, test_seller):
     return {"product": product, "other_seller": other_seller}
 
 
+# ========== ТЕСТЫ ==========
+
 class TestB2B05ViewProduct:
     """Тесты для US-B2B-05: Просмотр карточки товара"""
 
     def test_get_moderated_product_returns_full_payload(
         self, client_with_db, test_moderated_product
     ):
-        """Сценарий 1: MODERATED товар возвращает полный payload с cost_price"""
+        """Сценарий 1: MODERATED товар возвращает полный payload"""
         product_id = test_moderated_product["product"].id
         
         response = client_with_db.get(
@@ -238,23 +245,24 @@ class TestB2B05ViewProduct:
         assert data["title"] == "Moderated Product"
         assert data["status"] == "MODERATED"
         assert data["deleted"] is False
-        assert data["blocked"] is False
         
-        # blocking_reason и field_reports должны быть null/пустыми
-        assert data["blocking_reason"] is None
-        assert data["field_reports"] == []
+        # blocking_reason_id должен быть None для MODERATED товара
+        assert data["blocking_reason_id"] is None
         
-        # Проверяем SKU с cost_price и reserved_quantity
+        # Проверяем SKU
         assert len(data["skus"]) == 1
         sku = data["skus"][0]
-        assert sku["cost_price"] == 700000
-        assert sku["reserved_quantity"] == 2
+        
+        # Проверяем поля, которые есть в спецификации SKUInProduct
+        assert sku["id"] is not None
+        assert sku["name"] == "SKU 1"
+        assert sku["price"] == 1000000
         assert sku["active_quantity"] == 5
 
     def test_get_blocked_product_returns_blocking_reason_and_field_reports(
         self, client_with_db, test_blocked_product
     ):
-        """Сценарий 2: BLOCKED товар возвращает blocking_reason и field_reports"""
+        """Сценарий 2: BLOCKED товар возвращает blocking_reason_id"""
         product_id = test_blocked_product["product"].id
         
         response = client_with_db.get(
@@ -270,32 +278,12 @@ class TestB2B05ViewProduct:
         assert data["title"] == "Blocked Product"
         assert data["status"] == "BLOCKED"
         assert data["deleted"] is False
-        assert data["blocked"] is True
         
-        # blocking_reason должен быть заполнен
-        assert data["blocking_reason"] is not None
-        assert data["blocking_reason"]["id"] == str(test_blocked_product["blocking_reason_id"])
-        assert data["blocking_reason"]["title"] is not None
-        assert data["blocking_reason"]["comment"] is not None
+        # blocking_reason_id должен быть заполнен
+        assert data["blocking_reason_id"] == str(test_blocked_product["blocking_reason_id"])
         
-        # field_reports должен содержать замечания
-        assert len(data["field_reports"]) == 2
-        
-        # Проверяем структуру field_reports
-        description_report = next(
-            (fr for fr in data["field_reports"] if fr["field_name"] == "description"),
-            None
-        )
-        assert description_report is not None
-        assert description_report["sku_id"] is None
-        assert "материал" in description_report["comment"].lower()
-        
-        sku_image_report = next(
-            (fr for fr in data["field_reports"] if fr["field_name"] == "sku_image"),
-            None
-        )
-        assert sku_image_report is not None
-        assert sku_image_report["sku_id"] is not None
+        # moderator_comment должен быть заполнен
+        assert data["moderator_comment"] is not None
 
     def test_get_others_product_returns_404(
         self, client_with_db, test_other_seller_product
@@ -308,7 +296,6 @@ class TestB2B05ViewProduct:
         
         assert response.status_code == 404
         error_data = response.json()
-        # flat-формат — без ["detail"]
         assert error_data["code"] == "NOT_FOUND"
 
     def test_get_nonexistent_returns_404(
@@ -322,5 +309,4 @@ class TestB2B05ViewProduct:
         
         assert response.status_code == 404
         error_data = response.json()
-        # flat-формат — без ["detail"]
         assert error_data["code"] == "NOT_FOUND"

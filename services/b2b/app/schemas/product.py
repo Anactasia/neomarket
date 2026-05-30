@@ -1,18 +1,18 @@
+# app/schemas/product.py
 from pydantic import BaseModel, Field, field_validator
 from typing import List, Optional
 from datetime import datetime
 from uuid import UUID
 from enum import Enum
 
+from app.schemas.sku import SKUResponse, SKUPublicResponse
 from app.schemas.common import (
-    CategoryRef, 
-    ImageResponse, 
-    CharacteristicValue, 
-    SKUInProduct,
+    Characteristic,
+    CharacteristicResponse,
     ProductImageCreate,
     ProductImageResponse,
-    CharacteristicValueResponse
 )
+from app.schemas.moderation import FieldReport, BlockingReason
 
 
 class ProductStatus(str, Enum):
@@ -23,50 +23,26 @@ class ProductStatus(str, Enum):
     HARD_BLOCKED = "HARD_BLOCKED"
 
 
-class FieldReport(BaseModel):
-    """Замечание по конкретному полю товара или SKU"""
-    field_name: str = Field(..., description="Имя поля: title, description, product_images, category, sku_name, sku_image, sku_price")
-    sku_id: Optional[UUID] = Field(None, description="ID SKU (null если замечание к товару)")
-    comment: str = Field(..., max_length=1000, description="Комментарий модератора")
-
-    class Config:
-        from_attributes = True
-
-
-class BlockingReason(BaseModel):
-    """Причина блокировки товара"""
-    id: UUID
-    title: str = Field(..., description="Текст причины")
-    comment: Optional[str] = Field(None, max_length=2000, description="Дополнительный комментарий модератора")
-
-    class Config:
-        from_attributes = True
-
-
 class ProductCreate(BaseModel):
+    """Создание товара (по спецификации B2B)"""
     title: str = Field(..., min_length=1, max_length=255)
     description: str = Field(..., min_length=1, max_length=5000)
     category_id: UUID
-    images: List[ProductImageCreate] = Field(default_factory=list)
-    characteristics: List[CharacteristicValue] = Field(default_factory=list)
     slug: Optional[str] = None
-    
-    @field_validator('title')
-    @classmethod
-    def validate_title(cls, v: str) -> str:
-        if not v or not v.strip():
-            raise ValueError('title is required')
-        return v.strip()
-    
-    # @field_validator('description')
-    # @classmethod
-    # def validate_description(cls, v: str) -> str:
-    #     if not v or not v.strip():
-    #         raise ValueError('description is required')
-    #     return v.strip()
+    images: List[ProductImageCreate] = Field(default_factory=list)
+    characteristics: List[Characteristic] = Field(default_factory=list)
+
+
+class ProductUpdate(BaseModel):
+    """Обновление товара (PATCH, все поля опциональны) (по спецификации B2B)"""
+    title: Optional[str] = Field(None, min_length=1, max_length=255)
+    description: Optional[str] = None
+    category_id: Optional[UUID] = None
+    characteristics: Optional[List[Characteristic]] = None
 
 
 class ProductResponse(BaseModel):
+    """Полный ответ с товаром (seller view) (по спецификации B2B)"""
     id: UUID
     seller_id: UUID
     category_id: UUID
@@ -75,37 +51,24 @@ class ProductResponse(BaseModel):
     description: str
     status: ProductStatus
     deleted: bool
-    blocked: bool = False
-    blocking_reason: Optional[BlockingReason] = None
-    field_reports: List[FieldReport] = []
-    moderator_comment: Optional[str] = None
+    blocking_reason_id: Optional[UUID] = None      # ← добавлено
+    moderator_comment: Optional[str] = None        # ← добавлено
     images: List[ProductImageResponse]
-    characteristics: List[CharacteristicValueResponse]
-    skus: List[SKUInProduct] = []
+    characteristics: List[CharacteristicResponse]
+    skus: List[SKUResponse]
     created_at: datetime
-    updated_at: Optional[datetime] = None
-    
+    updated_at: datetime
+
     class Config:
         from_attributes = True
 
 
-class ProductUpdate(BaseModel):
-    title: Optional[str] = Field(None, min_length=1, max_length=255)
-    description: Optional[str] = None
-    category_id: Optional[UUID] = None
-    characteristics: Optional[List[CharacteristicValue]] = None
+class ProductDetailResponse(ProductResponse):
+    """Детальный ответ с товаром (включая блокировки) (по спецификации B2B)"""
+    blocked: bool
+    blocking_reason: Optional[BlockingReason] = None
+    field_reports: List[FieldReport] = []
 
-
-class Product(BaseModel):
-    id: UUID
-    seller_id: UUID
-    status: str
-    title: str
-    description: Optional[str] = None
-    category_id: UUID
-    created_at: datetime
-    updated_at: Optional[datetime] = None
-    
     class Config:
         from_attributes = True
 
@@ -113,39 +76,22 @@ class Product(BaseModel):
 # ───────────────────── Public Catalog Schemas ─────────────────────
 
 class ProductPublicShortResponse(BaseModel):
-    """Краткая карточка товара для витрины"""
+    """Краткая карточка товара для витрины (по спецификации B2B)"""
     id: UUID
     title: str
     slug: str
     status: ProductStatus
     category_id: UUID
     created_at: datetime
-    min_price: Optional[int] = None
+    min_price: int
     cover_image: Optional[str] = None
-    
-    class Config:
-        from_attributes = True
 
-
-class SKUPublicResponse(BaseModel):
-    """Публичный SKU (без cost_price, reserved_quantity)"""
-    id: UUID
-    product_id: UUID
-    name: str
-    price: int
-    discount: int
-    stock_quantity: int
-    active_quantity: int
-    article: Optional[str] = None
-    images: List[ProductImageResponse] = []
-    characteristics: List[CharacteristicValueResponse] = []
-    
     class Config:
         from_attributes = True
 
 
 class ProductPublicResponse(BaseModel):
-    """Полная публичная карточка товара для витрины"""
+    """Полная публичная карточка товара для витрины (по спецификации B2B)"""
     id: UUID
     seller_id: UUID
     category_id: UUID
@@ -154,29 +100,60 @@ class ProductPublicResponse(BaseModel):
     description: str
     status: ProductStatus
     images: List[ProductImageResponse]
-    characteristics: List[CharacteristicValueResponse]
+    characteristics: List[CharacteristicResponse]
     skus: List[SKUPublicResponse]
     created_at: datetime
-    updated_at: Optional[datetime] = None
-    
+    updated_at: datetime
+
     class Config:
         from_attributes = True
 
 
+class ProductShortResponse(BaseModel):
+    """Краткая карточка товара для списка продавца (по спецификации B2B)"""
+    id: UUID
+    title: str
+    slug: str
+    status: ProductStatus
+    category_id: UUID
+    deleted: bool
+    created_at: datetime
+    min_price: int
+    cover_image: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class ProductPaginatedResponse(BaseModel):
+    """Пагинированный ответ списка товаров продавца (по спецификации B2B)"""
+    items: List[ProductShortResponse]
+    total_count: int
+    limit: int
+    offset: int
+
+
 class ProductPublicPaginatedResponse(BaseModel):
-    """Пагинированный ответ публичного каталога"""
+    """Пагинированный ответ публичного каталога (по спецификации B2B)"""
     items: List[ProductPublicShortResponse]
     total_count: int
     limit: int
     offset: int
-    
-    class Config:
-        from_attributes = True
+
+
+class ImageAttachRequest(BaseModel):
+    """Прикрепление изображения к товару/SKU (по спецификации B2B)"""
+    image_id: Optional[UUID] = None
+    url: Optional[str] = None
+    ordering: int = 0
+
+
+class ImageUpdateRequest(BaseModel):
+    """Обновление изображения товара/SKU (по спецификации B2B)"""
+    url: Optional[str] = None
+    ordering: Optional[int] = None
 
 
 class BatchProductIdsRequest(BaseModel):
-    """Запрос batch-получения товаров по ID"""
-    product_ids: List[UUID] = Field(..., min_length=1, max_length=100, description="Список product_id (макс 100)")
-    
-    class Config:
-        from_attributes = True
+    """Запрос batch-получения товаров по ID (по спецификации B2B)"""
+    product_ids: List[UUID] = Field(..., min_length=1, max_length=100)

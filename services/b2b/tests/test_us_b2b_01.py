@@ -105,8 +105,7 @@ class TestB2B01CreateProduct:
         # Проверка обязательных полей ProductResponse (обновлённые названия)
         assert "slug" in data
         assert "deleted" in data
-        assert "blocked" in data
-        assert "blocking_reason" in data
+        assert "blocking_reason_id" in data
         assert "moderator_comment" in data
     
     def test_seller_id_taken_from_jwt(self, client, auth_headers, test_category, test_seller):

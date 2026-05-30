@@ -1,11 +1,16 @@
 """
 Тесты для US-B2B-02: Создание SKU
 """
+import os
 import pytest
 from uuid import uuid4
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 from unittest.mock import patch, MagicMock
+
+# Устанавливаем переменные окружения ДО импорта приложения
+os.environ["B2B_TO_MOD_KEY"] = "test-mod-key"
+os.environ["B2C_TO_B2B_KEY"] = "test-b2c-key"
 
 from app.main import app
 from app.database import get_db
@@ -15,7 +20,6 @@ from app.models.seller import Seller
 from app.models.product import Product
 from app.core.security import get_password_hash, create_access_token
 from app.schemas.product import ProductStatus
-
 
 # Фикстуры для тестов
 @pytest.fixture
@@ -393,7 +397,7 @@ class TestB2B02CreateSKU:
 
         assert response.status_code == 403
         error_data = response.json()
-        assert error_data["code"] == "NOT_OWNER"  # ← FORBIDDEN → NOT_OWNER
+        assert error_data["code"] == "NOT_OWNER"  
         assert "does not belong" in error_data["message"].lower()
     
     def test_first_sku_sends_created_event_to_moderation(
@@ -423,7 +427,9 @@ class TestB2B02CreateSKU:
         
         event = created_events[0]
         assert event.target == "moderation"
-        assert "b2b-service-key" in str(event.headers)
+        headers = event.headers
+        assert headers.get("X-Service-Key") is not None
+        assert len(headers.get("X-Service-Key", "")) > 0
     
 
     def test_adding_sku_to_moderated_re_moderates_product(

@@ -1,41 +1,56 @@
-# app/schemas/category.py
 from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import datetime
 from uuid import UUID
 
+
 class CategoryBase(BaseModel):
+    """Внутренняя базовая схема (не экспортируется в API)"""
     name: str = Field(..., max_length=255)
-    slug: str = Field(..., max_length=255)
-    description: Optional[str] = None
     parent_id: Optional[UUID] = None
-    image_url: Optional[str] = None
     is_active: bool = True
-    sort_order: int = 0
-    is_restricted: bool = False  
+
 
 class CategoryCreate(CategoryBase):
+    """Создание категории (только админ)"""
     pass
 
-class CategoryUpdate(BaseModel):
-    name: Optional[str] = Field(None, max_length=255)
-    description: Optional[str] = None
-    image_url: Optional[str] = None
-    is_active: Optional[bool] = None
-    sort_order: Optional[int] = None
-    is_restricted: Optional[bool] = None  
 
-class Category(CategoryBase):
+class CategoryUpdate(BaseModel):
+    """Обновление категории (по спецификации B2B)"""
+    name: Optional[str] = Field(None, max_length=255)
+    parent_id: Optional[UUID] = None
+    is_active: Optional[bool] = None
+
+
+class CategoryResponse(BaseModel):
+    """Категория (по спецификации B2B)"""
     id: UUID
+    name: str
+    parent_id: Optional[UUID] = None
     level: int
-    created_at: Optional[datetime] = None  # ← ИЗМЕНИТЬ: сделать Optional
-    updated_at: Optional[datetime] = None
-    
-    # Для дерева категорий
-    children: List['Category'] = []
+    path: str = Field(..., description="Materialized path, например electronics/phones")
+    is_active: bool
+    created_at: datetime
 
     class Config:
         from_attributes = True
 
-# Нужно для рекурсивных ссылок
-Category.model_rebuild()
+
+class CategoryWithChildrenResponse(CategoryResponse):
+    """Категория с прямыми подкатегориями (по спецификации B2B)"""
+    children: List[CategoryResponse] = []
+
+
+class CategoryTreeResponse(BaseModel):
+    """Дерево категорий (по спецификации B2B)"""
+    id: UUID
+    name: str
+    children: List['CategoryTreeResponse'] = []
+
+    class Config:
+        from_attributes = True
+
+
+# Рекурсивная ссылка
+CategoryTreeResponse.model_rebuild()
