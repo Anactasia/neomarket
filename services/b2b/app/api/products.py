@@ -195,17 +195,8 @@ def send_event_to_moderation_sync(
     json_after: Optional[dict] = None,
     category_id: Optional[UUID] = None
 ):
-    """Сохраняет событие в outbox (формат соответствует canon)."""
+    """Сохраняет событие в outbox (формат соответствует спецификации Moderation)."""
     from datetime import datetime, timezone
-    
-    # Маппинг event_type в canon (по спецификации Moderation)
-    event_map = {
-        "PRODUCT_CREATED": "CREATED",
-        "PRODUCT_EDITED": "EDITED",
-        "SKU_EDITED": "EDITED",
-        "PRODUCT_DELETED": "DELETED",
-    }
-    canon_event = event_map.get(event_type, "UNKNOWN")
     
     payload: dict = {
         "product_id": str(product_id),
@@ -225,9 +216,9 @@ def send_event_to_moderation_sync(
         if json_after:
             payload["json_after"] = json_after
     
-    # Формат события по canon
+    # Формат события по спецификации Moderation (event_type, не event)
     event_payload = {
-        "event": canon_event,  # ← изменено с event_type
+        "event_type": event_type,  # ← возвращено к event_type
         "idempotency_key": str(idempotency_key),
         "occurred_at": datetime.now(timezone.utc).isoformat(),
         "payload": payload
@@ -235,7 +226,7 @@ def send_event_to_moderation_sync(
     
     save_to_outbox(
         db=db,
-        event_type=event_type,  # сохраняем оригинальный тип для фильтрации
+        event_type=event_type,
         target="moderation",
         url=f"{moderation_url}/api/v1/b2b/events",
         payload=event_payload,
