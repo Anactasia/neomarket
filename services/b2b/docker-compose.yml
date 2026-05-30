@@ -43,6 +43,8 @@ services:
       DATABASE_URL: postgresql+psycopg2://postgres:postgres@postgres:5432/neomarket_b2b
       B2B_TO_MOD_KEY: test-mod-key
       B2C_TO_B2B_KEY: test-b2c-key
+      CI: "true"                              
+      USE_POSTGRES_FOR_TESTS: "true"         
     volumes:
       - .:/app
       - ./migrations:/app/migrations
