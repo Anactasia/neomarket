@@ -43,7 +43,7 @@ def send_event_to_moderation(
     json_after: Optional[dict] = None,
     category_id: Optional[UUID] = None
 ):
-    """Сохраняет событие в outbox."""
+    """Сохраняет событие в outbox (формат соответствует спецификации Moderation)."""
     from datetime import datetime, timezone
     
     payload: dict = {
@@ -59,8 +59,9 @@ def send_event_to_moderation(
         payload["json_before"] = json_before or {}
         payload["json_after"] = json_after or {}
     
+    # Формат события по спецификации Moderation
     event_payload = {
-        "event_type": event_type,
+        "event_type": event_type,  # ← PRODUCED_CREATED, PRODUCT_EDITED, PRODUCT_DELETED
         "idempotency_key": str(idempotency_key),
         "occurred_at": datetime.now(timezone.utc).isoformat(),
         "payload": payload
@@ -140,7 +141,7 @@ def get_sku(
     
     product = db.query(Product).filter(Product.id == sku.product_id).first()
     if product.seller_id != current_seller.id:
-        error_response("FORBIDDEN", "SKU does not belong to you", 403)
+        error_response("NOT_OWNER", "SKU does not belong to you", 403)
     
     return _sku_to_response(sku)
 
@@ -210,10 +211,7 @@ def create_sku(
         product.status = ProductStatus.ON_MODERATION
         db.flush()
     
-    db.commit()
-    db.refresh(db_sku)
-    
-    # 8. Отправляем событие в Moderation
+    # 8. Отправляем событие в Moderation (ДО commit)
     if is_first_sku:
         key_string = f"{sku.product_id}:PRODUCT_CREATED"
         idempotency_key = str(uuid_module.uuid5(uuid_module.NAMESPACE_DNS, key_string))
@@ -261,7 +259,10 @@ def create_sku(
             category_id=product.category_id
         )
     
+    # 9. Commit ПОСЛЕ отправки события в outbox
+    db.commit()
     db.refresh(db_sku)
+    
     return _sku_to_response(db_sku)
 
 
@@ -332,11 +333,9 @@ def update_sku(
     if needs_status_change:
         product.status = ProductStatus.ON_MODERATION
     
-    db.commit()
-    db.refresh(db_sku)
-    db.refresh(product)
+    db.flush()
     
-    # 8. Отправляем событие
+    # 8. Отправляем событие (ДО commit)
     if needs_status_change or old_product_status != ProductStatus.CREATED:
         idempotency_key = uuid_module.uuid4()
         
@@ -365,7 +364,11 @@ def update_sku(
             category_id=product.category_id
         )
     
+    # 9. Commit ПОСЛЕ отправки события
+    db.commit()
     db.refresh(db_sku)
+    db.refresh(product)
+    
     return _sku_to_response(db_sku)
 
 
@@ -418,7 +421,7 @@ def add_sku_image(
     
     product = db.query(Product).filter(Product.id == sku.product_id).first()
     if product.seller_id != current_seller.id:
-        error_response("FORBIDDEN", "SKU does not belong to you", 403)
+        error_response("NOT_OWNER", "SKU does not belong to you", 403)
     
     db_image = SKUImage(
         sku_id=sku_id,
@@ -451,7 +454,7 @@ def update_sku_image(
     sku = db.query(SKU).filter(SKU.id == db_image.sku_id).first()
     product = db.query(Product).filter(Product.id == sku.product_id).first()
     if product.seller_id != current_seller.id:
-        error_response("FORBIDDEN", "Image does not belong to you", 403)
+        error_response("NOT_OWNER", "Image does not belong to you", 403)
     
     if image_data.url is not None:
         db_image.url = image_data.url
@@ -482,7 +485,7 @@ def delete_sku_image(
     sku = db.query(SKU).filter(SKU.id == db_image.sku_id).first()
     product = db.query(Product).filter(Product.id == sku.product_id).first()
     if product.seller_id != current_seller.id:
-        error_response("FORBIDDEN", "Image does not belong to you", 403)
+        error_response("NOT_OWNER", "Image does not belong to you", 403)
     
     db.delete(db_image)
     db.commit()
@@ -503,7 +506,7 @@ def get_product_skus(
         error_response("NOT_FOUND", "Product not found", 404)
     
     if product.seller_id != current_seller.id:
-        error_response("FORBIDDEN", "Product does not belong to you", 403)
+        error_response("NOT_OWNER", "Product does not belong to you", 403)
     
     skus = db.query(SKU).options(
         selectinload(SKU.images),

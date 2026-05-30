@@ -606,12 +606,13 @@ class TestB2B03EditSKU:
         event = edited_events[-1]
         assert event.target == "moderation"
         
-        # ✅ Исправлено: проверяем, что ключ не пустой, а не конкретное значение
+        # Проверяем заголовок X-Service-Key
         headers = event.headers
         assert headers.get("X-Service-Key") is not None
         assert len(headers.get("X-Service-Key", "")) > 0
 
         payload = event.payload
+        # Проверяем event_type (соответствует спецификации Moderation)
         assert payload["event_type"] == "PRODUCT_EDITED"
         assert "idempotency_key" in payload
         assert "occurred_at" in payload
@@ -621,7 +622,7 @@ class TestB2B03EditSKU:
     def test_edit_sku_sends_sku_edited_event_to_moderation(
         self, client, auth_headers, test_product_moderated, db_session
     ):
-        """Проверка: редактирование SKU отправляет событие SKU_EDITED с sku_id в outbox"""
+        """Проверка: редактирование SKU отправляет событие SKU_EDITED в outbox"""
         from app.models.outbox import OutboxEvent
         from app.models.sku import SKU as SKUModel
         
@@ -661,6 +662,7 @@ class TestB2B03EditSKU:
             db_session.expire_all()
             db_session.commit()
 
+            # Фильтруем по event_type = SKU_EDITED
             outbox_events = db_session.query(OutboxEvent).filter(
                 OutboxEvent.event_type == "SKU_EDITED"
             ).all()
@@ -670,12 +672,13 @@ class TestB2B03EditSKU:
             event = outbox_events[-1]
             assert event.target == "moderation"
             
-            # ✅ Исправлено: проверяем, что ключ не пустой
+            # Проверяем заголовок X-Service-Key
             headers = event.headers
             assert headers.get("X-Service-Key") is not None
             assert len(headers.get("X-Service-Key", "")) > 0
             
             payload = event.payload
+            # Проверяем event_type для SKU_EDITED
             assert payload["event_type"] == "SKU_EDITED"
             assert "idempotency_key" in payload
             assert "occurred_at" in payload

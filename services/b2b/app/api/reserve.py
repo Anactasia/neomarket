@@ -118,9 +118,8 @@ def reserve_inventory(
             "details": {"failed_items": failed_items}
         })
     
-    # Выполняем резервирование
+    # Выполняем резервирование и собираем триггеры
     sku_out_of_stock_trigger = []
-    
     for item in request.items:
         sku = sku_map[item.sku_id]
         sku.active_quantity -= item.quantity
@@ -129,23 +128,25 @@ def reserve_inventory(
         
         if remaining_stock == 0:
             sku_out_of_stock_trigger.append((sku.id, sku.product_id))
-    
+
+    # Отправляем outbox-события ДО commit
+    for sku_id, product_id in sku_out_of_stock_trigger:
+        send_sku_out_of_stock_event(sku_id, product_id, db)
+
+    # Commit всего вместе (резервирование + outbox)
     db.commit()
-    
+
     result = ReserveResponse(
         order_id=request.order_id,
         status="RESERVED",
         reserved_at=datetime.now(timezone.utc)
     )
-    
+
     _idempotency_cache[request.idempotency_key] = {
         "result": result,
         "expires_at": datetime.now(timezone.utc) + timedelta(hours=1)
     }
-    
-    for sku_id, product_id in sku_out_of_stock_trigger:
-        send_sku_out_of_stock_event(sku_id, product_id, db)
-    
+
     return result
 
 
