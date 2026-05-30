@@ -7,8 +7,8 @@ from app.database import get_db
 from app.models.seller import Seller
 from app.schemas.seller import (
     SellerResponse,
-    SellerCreateWithValidation,
-    SellerUpdateWithValidation
+    SellerRegisterRequest,  
+    SellerUpdateRequest     
 )
 from app.dependencies.auth import get_current_seller
 from app.models.seller import Seller as SellerModel
@@ -33,7 +33,7 @@ router = APIRouter(prefix="/admin/sellers", tags=["Admin Sellers"])
 
 @router.post("/", response_model=SellerResponse, status_code=status.HTTP_201_CREATED)
 def create_seller(
-    seller: SellerCreateWithValidation,
+    seller: SellerRegisterRequest,
     db: Session = Depends(get_db),
     current_seller: SellerModel = Depends(get_current_seller)
 ):
@@ -138,7 +138,7 @@ def get_seller(
 @router.patch("/{seller_id}", response_model=SellerResponse)
 def update_seller(
     seller_id: UUID,
-    seller_update: SellerUpdateWithValidation,
+    seller_update: SellerUpdateRequest,
     db: Session = Depends(get_db),
     current_seller: SellerModel = Depends(get_current_seller)
 ):

@@ -5,15 +5,17 @@ from typing import Optional
 from uuid import UUID
 import os
 import uuid as uuid_module
+import logging
 
 from app.database import get_db
 from app.models.product import Product
 from app.models.sku import SKU
 from app.schemas.moderation import ModerationEventRequest, ModerationEventType
 from app.services.outbox import save_to_outbox
-from app.dependencies.service_keys import verify_moderation_service_key  # ← импорт
+from app.dependencies.service_keys import verify_moderation_service_key
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def error_response(code: str, message: str, status_code: int = 400):
@@ -23,7 +25,7 @@ def error_response(code: str, message: str, status_code: int = 400):
     )
 
 
-# В production — Redis или таблица в БД
+# TODO: заменить на БД в production
 _moderation_idempotency_cache: dict[str, bool] = {}
 
 
@@ -34,26 +36,28 @@ def receive_moderation_event(
     db: Session = Depends(get_db)
 ):
     """
-    Приём событий от Moderation Service: MODERATED, BLOCKED.
+    POST /api/v1/moderation/events - приём событий от Moderation Service.
     
-    Соответствует спецификации:
-    - URL: POST /api/v1/moderation/events
-    - Авторизация: X-Service-Key
-    - Идемпотентность: по idempotency_key (TTL 24 часа)
+    Соответствует спецификации neomarket-b2b.yaml.
     """
-    # Проверка X-Service-Key (используем импортированную функцию)
+    # Проверка X-Service-Key
     if x_service_key is None or not verify_moderation_service_key(x_service_key):
         error_response("UNAUTHORIZED", "X-Service-Key is required", 401)
     
     # Проверка идемпотентности
     cache_key = f"moderation:{event.idempotency_key}"
     if cache_key in _moderation_idempotency_cache:
-        return None  # Дубликат — возвращаем 204
+        logger.info(f"Duplicate moderation event: {event.idempotency_key}")
+        return None
     
+    # Поиск товара
     product = db.query(Product).filter(Product.id == event.product_id).first()
     if not product:
         error_response("NOT_FOUND", "Product not found", 404)
     
+    logger.info(f"Processing moderation event for product {product.id}: {event.event_type}")
+    
+    # Обработка MODERATED
     if event.event_type == ModerationEventType.MODERATED:
         product.status = "MODERATED"
         product.blocked = False
@@ -62,6 +66,7 @@ def receive_moderation_event(
         product.field_reports_json = []
         product.published_at = datetime.now(timezone.utc)
     
+    # Обработка BLOCKED
     elif event.event_type == ModerationEventType.BLOCKED:
         if event.hard_block:
             product.status = "HARD_BLOCKED"
@@ -81,14 +86,13 @@ def receive_moderation_event(
                 for fr in event.field_reports
             ]
         
-        # Если были active_quantity > 0 — отправляем событие в B2C
+        # Отправка события в B2C при наличии остатков
         skus_with_stock = db.query(SKU).filter(
             SKU.product_id == product.id,
             SKU.active_quantity > 0
         ).all()
         
         if skus_with_stock:
-            sku_ids = [sku.id for sku in skus_with_stock]
             b2c_idempotency_key = uuid_module.uuid4()
             
             event_payload = {
@@ -97,7 +101,7 @@ def receive_moderation_event(
                 "occurred_at": datetime.now(timezone.utc).isoformat(),
                 "payload": {
                     "product_id": str(product.id),
-                    "sku_ids": [str(sku_id) for sku_id in sku_ids]
+                    "sku_ids": [str(sku.id) for sku in skus_with_stock]
                 }
             }
             
@@ -109,10 +113,10 @@ def receive_moderation_event(
                 payload=event_payload,
                 headers={"X-Service-Key": os.getenv("B2B_TO_B2C_KEY", "b2b-to-b2c-key")}
             )
+            
+            logger.info(f"Sent B2C event for product {product.id}: {event_payload['event_type']}")
     
     db.commit()
-    
-    # Сохраняем idempotency_key (в production — с TTL 24 часа)
     _moderation_idempotency_cache[cache_key] = True
     
     return None

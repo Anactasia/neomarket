@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import Optional
 from uuid import UUID
 
 from app.database import get_db
@@ -20,12 +20,24 @@ def error_response(code: str, message: str, status_code: int = 400):
 
 
 def check_admin(current_seller: Seller):
-    """Проверка прав администратора (по роли или флагу)"""
-    if current_seller.role != "ADMIN":  # или current_seller.is_admin
+    if current_seller.role != "ADMIN":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"code": "FORBIDDEN", "message": "Admin access required"}
         )
+
+
+def compute_materialized_path(category: Category, db: Session) -> str:
+    """Вычисляет materialized path, например 'electronics/smartphones'"""
+    path_parts = []
+    current = category
+    while current:
+        path_parts.insert(0, current.name)
+        if current.parent_id:
+            current = db.query(Category).filter(Category.id == current.parent_id).first()
+        else:
+            current = None
+    return "/".join(path_parts)
 
 
 @router.post("/", response_model=CategoryResponse, status_code=status.HTTP_201_CREATED)
@@ -37,11 +49,6 @@ def create_category(
     """[ADMIN ONLY] Создать новую категорию"""
     check_admin(current_seller)
     
-    # Проверка дубликата slug
-    existing = db.query(Category).filter(Category.slug == category.slug).first()
-    if existing:
-        error_response("DUPLICATE_SLUG", "Category with this slug already exists", 409)
-    
     level = 0
     if category.parent_id:
         parent = db.query(Category).filter(Category.id == category.parent_id).first()
@@ -51,7 +58,6 @@ def create_category(
     
     db_category = Category(
         name=category.name,
-        slug=category.slug,
         parent_id=category.parent_id,
         level=level,
         is_active=category.is_active
@@ -65,7 +71,7 @@ def create_category(
         name=db_category.name,
         parent_id=db_category.parent_id,
         level=db_category.level,
-        path=[],  # path должен вычисляться или заполняться
+        path=compute_materialized_path(db_category, db),
         is_active=db_category.is_active,
         created_at=db_category.created_at
     )
@@ -78,7 +84,7 @@ def update_category(
     db: Session = Depends(get_db),
     current_seller: Seller = Depends(get_current_seller)
 ):
-    """[ADMIN ONLY] Обновить категорию (PATCH)"""
+    """[ADMIN ONLY] Обновить категорию"""
     check_admin(current_seller)
     
     category = db.query(Category).filter(Category.id == category_id).first()
@@ -97,7 +103,7 @@ def update_category(
         name=category.name,
         parent_id=category.parent_id,
         level=category.level,
-        path=[],
+        path=compute_materialized_path(category, db),
         is_active=category.is_active,
         created_at=category.created_at
     )

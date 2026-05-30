@@ -13,6 +13,7 @@ class CategoryCreate(CategoryBase):
 
 class CategoryUpdate(BaseModel):
     name: Optional[str] = Field(None, max_length=255)
+    parent_id: Optional[UUID] = None
     is_active: Optional[bool] = None
 
 class CategoryResponse(BaseModel):
@@ -21,15 +22,20 @@ class CategoryResponse(BaseModel):
     name: str
     parent_id: Optional[UUID] = None
     level: int
-    path: List[str]  # ← добавлено
+    path: str = Field(..., description="Materialized path like 'electronics/phones'")
     is_active: bool
     created_at: datetime
     
     class Config:
         from_attributes = True
 
-class CategoryTreeResponse(CategoryResponse):
+class CategoryTreeResponse(BaseModel):
+    id: UUID
+    name: str
     children: List['CategoryTreeResponse'] = []
+
+    class Config:
+        from_attributes = True
 
 # Нужно для рекурсивных ссылок
 CategoryTreeResponse.model_rebuild()

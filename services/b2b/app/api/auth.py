@@ -1,25 +1,27 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from uuid import UUID
 
 from app.database import get_db
 from app.models.seller import Seller
-from app.schemas.auth import (
-    SellerRegister, SellerLogin, TokenResponse, 
-    RefreshRequest
-)
+from app.schemas.seller import SellerRegisterRequest, SellerLoginRequest, RefreshRequest
+from app.schemas.auth import TokenResponse
 from app.core.security import (
     get_password_hash, verify_password, 
     create_access_token, create_refresh_token, decode_token
 )
+from app.dependencies.auth import get_current_seller
 
-router = APIRouter(prefix="/api/v1/auth", tags=["Auth"])  # ← исправлен префикс
+router = APIRouter(tags=["Auth"])  # префикс из основного роутера
 
 
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
-def register(seller_data: SellerRegister, db: Session = Depends(get_db)):
-    """Регистрация продавца (возвращает токены для входа)"""
+def register(
+    seller_data: SellerRegisterRequest,
+    db: Session = Depends(get_db)
+):
+    """POST /api/v1/auth/register - регистрация продавца"""
     
-    # Проверка email на уникальность (409 Conflict)
     existing = db.query(Seller).filter(Seller.email == seller_data.email).first()
     if existing:
         raise HTTPException(
@@ -27,7 +29,6 @@ def register(seller_data: SellerRegister, db: Session = Depends(get_db)):
             detail={"code": "EMAIL_EXISTS", "message": "Email already registered"}
         )
     
-    # Проверка INN на уникальность (409 Conflict)
     existing_inn = db.query(Seller).filter(Seller.inn == seller_data.inn).first()
     if existing_inn:
         raise HTTPException(
@@ -35,7 +36,6 @@ def register(seller_data: SellerRegister, db: Session = Depends(get_db)):
             detail={"code": "INN_EXISTS", "message": "INN already registered"}
         )
     
-    # Создание продавца (только поля из спецификации)
     db_seller = Seller(
         email=seller_data.email,
         hashed_password=get_password_hash(seller_data.password),
@@ -53,20 +53,24 @@ def register(seller_data: SellerRegister, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(db_seller)
     
-    # Возвращаем токены (по спецификации)
     access_token = create_access_token(data={"sub": str(db_seller.id)})
     refresh_token = create_refresh_token(data={"sub": str(db_seller.id)})
     
     return TokenResponse(
+        user_id=db_seller.id,
         access_token=access_token,
         refresh_token=refresh_token,
-        token_type="bearer"
+        expires_in=3600,
+        token_type="Bearer"
     )
 
 
 @router.post("/login", response_model=TokenResponse)
-def login(login_data: SellerLogin, db: Session = Depends(get_db)):
-    """Логин продавца"""
+def login(
+    login_data: SellerLoginRequest,
+    db: Session = Depends(get_db)
+):
+    """POST /api/v1/auth/login - логин продавца"""
     
     seller = db.query(Seller).filter(Seller.email == login_data.email).first()
     if not seller or not verify_password(login_data.password, seller.hashed_password):
@@ -85,12 +89,19 @@ def login(login_data: SellerLogin, db: Session = Depends(get_db)):
     access_token = create_access_token(data={"sub": str(seller.id)})
     refresh_token = create_refresh_token(data={"sub": str(seller.id)})
     
-    return TokenResponse(access_token=access_token, refresh_token=refresh_token, token_type="bearer")
+    return TokenResponse(
+        user_id=seller.id,
+        access_token=access_token,
+        refresh_token=refresh_token,
+        expires_in=3600,
+        token_type="Bearer"
+    )
 
 
 @router.post("/refresh", response_model=TokenResponse)
 def refresh_token(refresh_data: RefreshRequest):
-    """Обновление access токена по refresh токену"""
+    """POST /api/v1/auth/refresh - обновление access токена"""
+    
     payload = decode_token(refresh_data.refresh_token)
     
     if payload.get("type") != "refresh":
@@ -109,10 +120,17 @@ def refresh_token(refresh_data: RefreshRequest):
     new_access_token = create_access_token(data={"sub": seller_id})
     new_refresh_token = create_refresh_token(data={"sub": seller_id})
     
-    return TokenResponse(access_token=new_access_token, refresh_token=new_refresh_token, token_type="bearer")
+    return TokenResponse(
+        user_id=UUID(seller_id),
+        access_token=new_access_token,
+        refresh_token=new_refresh_token,
+        expires_in=3600,
+        token_type="Bearer"
+    )
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
-def logout():
-    """Логаут (клиент должен удалить токены)"""
+def logout(current_seller: Seller = Depends(get_current_seller)):
+    """POST /api/v1/auth/logout - выход (отзыв refresh токена)"""
+    # TODO: добавить refresh токен в черный список
     return None

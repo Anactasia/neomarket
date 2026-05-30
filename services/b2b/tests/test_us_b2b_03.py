@@ -758,8 +758,8 @@ class TestB2B03EditSKU:
             # Проверяем первый SKU
             sku_data = data["skus"][0]
             
-            # Проверяем, что image не пустой (первое изображение)
-            assert sku_data.get("image") is not None, "SKU image should not be None after PATCH"
+            # Проверяем, что images поле присутствует и не пустое
+            assert "images" in sku_data, "SKU should have images field"
             
             # Проверяем, что images массив не пустой
             assert len(sku_data.get("images", [])) > 0, "SKU images array should not be empty after PATCH"

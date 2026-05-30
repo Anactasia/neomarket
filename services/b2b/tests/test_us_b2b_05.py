@@ -229,7 +229,7 @@ class TestB2B05ViewProduct:
     def test_get_moderated_product_returns_full_payload(
         self, client_with_db, test_moderated_product
     ):
-        """Сценарий 1: MODERATED товар возвращает полный payload с cost_price"""
+        """Сценарий 1: MODERATED товар возвращает полный payload"""
         product_id = test_moderated_product["product"].id
         
         response = client_with_db.get(
@@ -249,11 +249,14 @@ class TestB2B05ViewProduct:
         # blocking_reason_id должен быть None для MODERATED товара
         assert data["blocking_reason_id"] is None
         
-        # Проверяем SKU с cost_price и reserved_quantity
+        # Проверяем SKU
         assert len(data["skus"]) == 1
         sku = data["skus"][0]
-        assert sku["cost_price"] == 700000
-        assert sku["reserved_quantity"] == 2
+        
+        # Проверяем поля, которые есть в спецификации SKUInProduct
+        assert sku["id"] is not None
+        assert sku["name"] == "SKU 1"
+        assert sku["price"] == 1000000
         assert sku["active_quantity"] == 5
 
     def test_get_blocked_product_returns_blocking_reason_and_field_reports(

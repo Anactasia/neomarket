@@ -17,18 +17,18 @@ from app.api.images import router as images_router
 router = APIRouter(prefix="/api/v1")
 
 # Подключаем роутеры
+router.include_router(auth_router, prefix="/auth", tags=["Auth"])
 router.include_router(products_router, prefix="/products", tags=["Products"])
 router.include_router(sellers_router, prefix="/sellers", tags=["Sellers"])
 router.include_router(categories_router, prefix="/categories", tags=["Categories"])
-router.include_router(admin_categories_router, prefix="/categories", tags=["Categories"])
 router.include_router(skus_router, prefix="/skus", tags=["SKU"])
 router.include_router(invoices_router, prefix="/invoices", tags=["Invoices"])
 router.include_router(reserve_router, prefix="/inventory", tags=["Inventory"])
-router.include_router(internal_router, prefix="/moderation", tags=["Internal"])
+router.include_router(internal_router, prefix="/moderation", tags=["Moderation"])
 router.include_router(public_router, prefix="/public", tags=["Public Catalog"])  
 router.include_router(images_router, prefix="/images", tags=["Images"])
 
 
 # Подключаем админские роутеры
-router.include_router(admin_sellers_router, tags=["Admin"])
+# router.include_router(admin_sellers_router, tags=["Admin"])
 router.include_router(admin_categories_router, prefix="/categories", tags=["Admin"])

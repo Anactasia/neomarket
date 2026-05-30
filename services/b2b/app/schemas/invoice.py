@@ -35,11 +35,11 @@ class InvoiceResponse(BaseModel):
     """Ответ с накладной"""
     id: UUID
     seller_id: UUID
-    status: str
+    status: InvoiceStatus  # ← используем enum, не str
     created_at: datetime
-    updated_at: Optional[datetime] = None
-    accepted_at: Optional[datetime] = None
-    accepted_by: Optional[UUID] = None  # Оператор-админ, принявший накладную (по спецификации OpenAPI)
+    updated_at: datetime  # ← обязательное, не Optional
+    accepted_at: Optional[datetime] = None  # ← может быть null
+    accepted_by: Optional[UUID] = None
     items: List[InvoiceItemResponse] = []
     
     class Config:

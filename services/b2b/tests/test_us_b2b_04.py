@@ -388,7 +388,9 @@ class TestB2B04DeleteProduct:
         
         assert event is not None, "Event for this product not found"
         assert event.target == "b2c"
-        assert "b2b-to-b2c-key" in str(event.headers)
+        import os
+        expected_key = os.getenv("B2C_TO_B2B_KEY", "b2b-to-b2c-key")
+        assert expected_key in str(event.headers), f"Expected '{expected_key}' in headers, got {event.headers}"
         
         payload = event.payload
         assert payload["event_type"] == "PRODUCT_DELETED"

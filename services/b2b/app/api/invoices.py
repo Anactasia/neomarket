@@ -70,7 +70,7 @@ def create_invoice(
     # 3. Создаём накладную
     db_invoice = Invoice(
         seller_id=current_seller.id,
-        status="CREATED"
+        status=InvoiceStatus.CREATED
     )
     db.add(db_invoice)
     db.flush()
@@ -97,7 +97,7 @@ def create_invoice(
         created_at=db_invoice.created_at,
         updated_at=db_invoice.updated_at,
         accepted_at=db_invoice.accepted_at,
-        accepted_by=None,
+        accepted_by=db_invoice.accepted_by_id,
         items=[
             InvoiceItemResponse(
                 id=inv_item.id,
@@ -113,15 +113,15 @@ def create_invoice(
 def get_invoices(
     limit: int = 20,
     offset: int = 0,
-    status: Optional[InvoiceStatus] = None,
+    status_filter: Optional[InvoiceStatus] = None,
     db: Session = Depends(get_db),
     current_seller: Seller = Depends(get_current_seller)
 ):
     """Получить список накладных текущего продавца с пагинацией и фильтром по статусу"""
     query = db.query(Invoice).filter(Invoice.seller_id == current_seller.id)
     
-    if status:
-        query = query.filter(Invoice.status == status.value)
+    if status_filter:
+        query = query.filter(Invoice.status == status_filter)
     
     total_count = query.count()
     invoices = query.options(selectinload(Invoice.items)).offset(offset).limit(limit).all()
@@ -167,16 +167,10 @@ def delete_invoice(
     ).first()
     
     if not invoice:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": "NOT_FOUND", "message": "Invoice not found"}
-        )
+        error_response("NOT_FOUND", "Invoice not found", 404)
     
-    if invoice.status != "CREATED":
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={"code": "INVALID_STATE", "message": "Invoice can only be deleted in CREATED status"}
-        )
+    if invoice.status != InvoiceStatus.CREATED:
+        error_response("INVALID_STATE", "Invoice can only be deleted in CREATED status", 409)
     
     db.delete(invoice)
     db.commit()
@@ -196,10 +190,7 @@ def get_invoice(
     ).first()
     
     if not invoice:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={"code": "NOT_FOUND", "message": "Invoice not found"}
-        )
+        error_response("NOT_FOUND", "Invoice not found", 404)
     
     return InvoiceResponse(
         id=invoice.id,
@@ -233,17 +224,17 @@ def accept_invoice(
         Invoice.seller_id == current_seller.id
     ).first()
     if not invoice:
-        raise HTTPException(404, detail={"code": "NOT_FOUND", "message": "Invoice not found"})
+        error_response("NOT_FOUND", "Invoice not found", 404)
     
     # 2. Проверка статуса
-    if invoice.status in ["ACCEPTED", "PARTIALLY_ACCEPTED", "CANCELLED"]:
-        raise HTTPException(409, detail={"code": "INVALID_STATE", "message": "Invoice cannot be accepted"})
+    if invoice.status in [InvoiceStatus.ACCEPTED, InvoiceStatus.PARTIALLY_ACCEPTED, InvoiceStatus.CANCELLED]:
+        error_response("INVALID_STATE", "Invoice cannot be accepted", 409)
     
     # 3. Загружаем все SKU одним запросом (решаем N+1)
     all_sku_ids = [item.sku_id for item in invoice.items]
     skus = {sku.id: sku for sku in db.query(SKU).filter(SKU.id.in_(all_sku_ids)).all()}
     
-    # 4. Полная приёмка
+    # 4. Полная приёмка (если accept_request не передан или accepted_items пуст)
     if accept_request is None or not accept_request.accepted_items:
         for inv_item in invoice.items:
             inv_item.accepted_quantity = inv_item.quantity
@@ -251,7 +242,7 @@ def accept_invoice(
             if sku:
                 sku.active_quantity += inv_item.quantity
         
-        invoice.status = "ACCEPTED"
+        invoice.status = InvoiceStatus.ACCEPTED
         invoice.accepted_at = datetime.now(timezone.utc)
         invoice.accepted_by_id = current_seller.id
         invoice.updated_at = datetime.now(timezone.utc)
@@ -284,12 +275,12 @@ def accept_invoice(
     
     for accept_item in accept_request.accepted_items:
         if accept_item.invoice_item_id not in invoice_items:
-            raise HTTPException(400, detail={"code": "INVALID_REQUEST", "message": f"Invoice item {accept_item.invoice_item_id} not found"})
+            error_response("INVALID_REQUEST", f"Invoice item {accept_item.invoice_item_id} not found", 400)
         
         inv_item = invoice_items[accept_item.invoice_item_id]
         
         if accept_item.accepted_quantity < 0 or accept_item.accepted_quantity > inv_item.quantity:
-            raise HTTPException(400, detail={"code": "INVALID_REQUEST", "message": f"Invalid accepted_quantity for {inv_item.id}"})
+            error_response("INVALID_REQUEST", f"Invalid accepted_quantity for {inv_item.id}", 400)
         
         inv_item.accepted_quantity = accept_item.accepted_quantity
         
@@ -300,16 +291,18 @@ def accept_invoice(
         total_accepted += accept_item.accepted_quantity
         total_quantity += inv_item.quantity
     
-    # 6. Определяем статус
+    # 6. Проверка, что хоть что-то принято
+    if total_accepted == 0:
+        error_response("INVALID_REQUEST", "At least one item must be accepted", 400)
+    
+    # 7. Определяем статус
     if total_accepted == total_quantity:
-        invoice.status = "ACCEPTED"
+        invoice.status = InvoiceStatus.ACCEPTED
         invoice.accepted_at = datetime.now(timezone.utc)
-        invoice.accepted_by_id = current_seller.id  
-    elif total_accepted > 0:
-        invoice.status = "PARTIALLY_ACCEPTED"
-        # accepted_at НЕ обновляем
+        invoice.accepted_by_id = current_seller.id
     else:
-        raise HTTPException(400, detail={"code": "INVALID_REQUEST", "message": "At least one item must be accepted"})
+        invoice.status = InvoiceStatus.PARTIALLY_ACCEPTED
+        # accepted_at НЕ обновляем при частичной приёмке
     
     invoice.updated_at = datetime.now(timezone.utc)
     db.commit()

@@ -74,16 +74,16 @@ def client(db_session):
 
 
 # -------------------------
-# Seed categories (REAL DATA)
+# Seed categories (REAL DATA) - БЕЗ slug
 # -------------------------
 
 def create_category_tree(db, data, parent_id=None, level=0):
     category = Category(
         name=data["name"],
-        slug=data["slug"],
+        # slug УДАЛЁН (нет в спецификации)
         parent_id=parent_id,
         level=level,
-        is_restricted=data.get("is_restricted", False),
+        # is_restricted УДАЛЁН (нет в спецификации)
         is_active=True
     )
     db.add(category)
@@ -112,11 +112,14 @@ def seeded_categories(db_session):
 @pytest.fixture
 def test_seller(db_session):
     seller = Seller(
+        email="test@example.com",
+        first_name="Test",
+        last_name="Seller",
         company_name="Test Company",
         inn="123456789012",
-        email="test@example.com",
         phone="+79990000000",
-        status="ACTIVE"
+        hashed_password="hashed_password_123",  # ← добавить
+        is_active=True
     )
     db_session.add(seller)
     db_session.commit()
@@ -134,9 +137,11 @@ def test_product(db_session, test_seller, test_category):
     product = Product(
         title="Test Product",
         slug="test-product",
+        description="Test description",  # ← description обязателен
         seller_id=test_seller.id,
         category_id=test_category.id,
-        status="CREATED"
+        status="CREATED",
+        deleted=False
     )
     db_session.add(product)
     db_session.commit()
@@ -150,11 +155,34 @@ def test_sku(db_session, test_product):
         product_id=test_product.id,
         name="Test SKU",
         price=10000,
+        cost_price=8000,           # ← добавить
+        discount=0,
         stock_quantity=100,    
         active_quantity=100,   
-        reserved_quantity=0
+        reserved_quantity=0,
+        article="TEST-001"         # ← добавить
     )
     db_session.add(sku)
     db_session.commit()
     db_session.refresh(sku)
     return sku
+
+
+# -------------------------
+# Auth fixtures
+# -------------------------
+
+@pytest.fixture
+def auth_headers(test_seller):
+    """Создаёт JWT токен для тестового продавца"""
+    from app.core.security import create_access_token
+    
+    access_token = create_access_token(data={"sub": str(test_seller.id)})
+    return {"Authorization": f"Bearer {access_token}"}
+
+
+@pytest.fixture
+def service_key_headers():
+    """Сервисный ключ для межсервисных вызовов"""
+    import os
+    return {"X-Service-Key": os.getenv("B2B_TO_MOD_KEY", "test-service-key")}

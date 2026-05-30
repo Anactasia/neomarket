@@ -3,7 +3,7 @@
 Соответствует neomarket-b2b.yaml
 """
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Literal
 from uuid import UUID
 from datetime import datetime, timezone
 
@@ -19,33 +19,18 @@ class ReserveRequest(BaseModel):
     """Запрос на резервирование от B2C"""
     idempotency_key: UUID = Field(..., description="Идемпотентность ключ (TTL 1 час)")
     order_id: UUID = Field(...)
-    items: List[ReserveItem] = Field(..., min_length=1, description="Список SKU для резервирования")
-
-
-class ReservedItemResponse(BaseModel):
-    """Результат по одному SKU при успешном резервировании"""
-    sku_id: UUID
-    reserved_quantity: int
-    remaining_stock: int
+    items: List[ReserveItem] = Field(..., min_length=1)
 
 
 class ReserveSuccessResponse(BaseModel):
-    """Ответ на успешное резервирование (200) - по спецификации"""
+    """Ответ на успешное резервирование (200)"""
     order_id: UUID
-    status: str = "RESERVED"
+    status: Literal["RESERVED"] = "RESERVED"
     reserved_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
-class FailedReserveItem(BaseModel):
-    """Проблемный SKU при неудачном резервировании"""
-    sku_id: UUID
-    requested: int
-    available: int
-    reason: str  # OUT_OF_STOCK или INSUFFICIENT_STOCK
-
-
 class ReserveErrorResponse(BaseModel):
-    """Ответ при неудачном резервировании (409) - по спецификации"""
+    """Ответ при неудачном резервировании (409)"""
     code: str = "INSUFFICIENT_STOCK"
     message: str = "Some items are out of stock or have insufficient quantity"
     details: dict = Field(default_factory=dict)
@@ -54,20 +39,20 @@ class ReserveErrorResponse(BaseModel):
 # ─── Unreserve (POST /api/v1/inventory/unreserve) ───
 
 class UnreserveItem(BaseModel):
-    sku_id: UUID = Field(..., description="ID SKU")
-    quantity: int = Field(..., gt=0, description="Количество для снятия резерва")
+    sku_id: UUID
+    quantity: int = Field(..., gt=0)
 
 
 class UnreserveRequest(BaseModel):
     """Запрос на снятие резерва (при отмене заказа)"""
-    order_id: UUID = Field(..., description="ID заказа в B2C (для идемпотентности)")
-    items: List[UnreserveItem] = Field(..., min_length=1, description="Список SKU для снятия резерва")
+    order_id: UUID
+    items: List[UnreserveItem] = Field(..., min_length=1)
 
 
 class UnreserveSuccessResponse(BaseModel):
-    """Ответ на успешное снятие резерва (200) - по спецификации InventoryOrderResponse"""
+    """Ответ на успешное снятие резерва (200)"""
     order_id: UUID
-    status: str = "UNRESERVED"
+    status: Literal["UNRESERVED"] = "UNRESERVED"
     processed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -75,14 +60,14 @@ class UnreserveSuccessResponse(BaseModel):
 
 class InventoryOrderRequest(BaseModel):
     """Запрос на снятие резерва или списание (fulfill)"""
-    order_id: UUID = Field(..., description="ID заказа в B2C (для идемпотентности)")
-    items: List[UnreserveItem] = Field(..., min_length=1, description="Список SKU для обработки")
+    order_id: UUID
+    items: List[UnreserveItem] = Field(..., min_length=1)
 
 
 class InventoryOrderResponse(BaseModel):
     """Ответ на успешное снятие резерва или списание (200)"""
     order_id: UUID
-    status: str = Field(..., pattern=r"^(UNRESERVED|FULFILLED)$")
+    status: Literal["UNRESERVED", "FULFILLED"]
     processed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     
     class Config:

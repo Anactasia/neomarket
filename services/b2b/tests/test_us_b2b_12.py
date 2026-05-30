@@ -291,9 +291,7 @@ class TestB2B12DeleteSKU:
             headers=auth_headers
         )
         
-        assert response.status_code == 200
-        data = response.json()
-        assert data["ok"] is True
+        assert response.status_code == 204
 
     def test_delete_sku_with_active_reserves_returns_409(
         self, client, auth_headers, test_product_with_reserved_sku
@@ -324,7 +322,7 @@ class TestB2B12DeleteSKU:
             headers=auth_headers
         )
         
-        assert response.status_code == 200
+        assert response.status_code == 204
         
         db_session.refresh(product)
         assert product.status == ProductStatus.CREATED.value

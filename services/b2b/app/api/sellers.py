@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.seller import Seller
-from app.schemas.seller import SellerResponse
+from app.schemas.seller import SellerResponse, SellerUpdateRequest
 from app.dependencies.auth import get_current_seller
 
 router = APIRouter()
@@ -15,13 +15,11 @@ def error_response(code: str, message: str, status_code: int = 400):
     )
 
 
-# ─── ME endpoints (IDOR-safe, id из JWT) ───
-
 @router.get("/me", response_model=SellerResponse)
 def get_my_seller_profile(
     current_seller: Seller = Depends(get_current_seller)
 ):
-    """Профиль текущего продавца"""
+    """GET /api/v1/sellers/me - профиль текущего продавца"""
     return SellerResponse(
         id=current_seller.id,
         email=current_seller.email,
@@ -38,13 +36,13 @@ def get_my_seller_profile(
 
 @router.patch("/me", response_model=SellerResponse)
 def update_my_seller_profile(
-    seller_update: dict,  # TODO: использовать SellerUpdateRequest
+    seller_update: SellerUpdateRequest,
     db: Session = Depends(get_db),
     current_seller: Seller = Depends(get_current_seller)
 ):
-    """Обновить профиль текущего продавца"""
-    # TODO: валидация полей
-    for field, value in seller_update.items():
+    """PATCH /api/v1/sellers/me - обновление профиля продавца"""
+    update_data = seller_update.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
         if hasattr(current_seller, field) and value is not None:
             setattr(current_seller, field, value)
     
@@ -70,7 +68,7 @@ def delete_my_seller_account(
     db: Session = Depends(get_db),
     current_seller: Seller = Depends(get_current_seller)
 ):
-    """Удалить аккаунт продавца (soft-delete)"""
+    """DELETE /api/v1/sellers/me - soft-delete аккаунта"""
     if not current_seller.is_active:
         error_response("INVALID_REQUEST", "Account already deleted", 400)
     
