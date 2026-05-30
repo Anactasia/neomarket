@@ -612,7 +612,7 @@ class TestB2B03EditSKU:
         assert len(headers.get("X-Service-Key", "")) > 0
 
         payload = event.payload
-        assert payload["event_type"] == "PRODUCT_EDITED"
+        assert payload["event"] == "EDITED"
         assert "idempotency_key" in payload
         assert "occurred_at" in payload
         assert payload["payload"]["product_id"] == str(test_product_moderated.id)
@@ -676,7 +676,7 @@ class TestB2B03EditSKU:
             assert len(headers.get("X-Service-Key", "")) > 0
             
             payload = event.payload
-            assert payload["event_type"] == "SKU_EDITED"
+            assert payload["event"] == "EDITED"
             assert "idempotency_key" in payload
             assert "occurred_at" in payload
         finally:

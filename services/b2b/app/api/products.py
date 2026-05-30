@@ -65,7 +65,7 @@ def product_to_full_response(product: Product, db: Session) -> ProductResponse:
     
     skus = []
     for sku in product.skus:
-        skus.append(SKUResponse(  # ← используем SKUResponse
+        skus.append(SKUResponse(
             id=sku.id,
             product_id=sku.product_id,
             name=sku.name,
@@ -103,8 +103,8 @@ def product_to_full_response(product: Product, db: Session) -> ProductResponse:
         description=product.description or "",
         status=ProductStatus(product.status),
         deleted=product.deleted,
-        blocking_reason_id=product.blocking_reason_id,      # ← добавить/проверить
-        moderator_comment=product.moderation_comment,       # ← добавить/проверить
+        blocking_reason_id=product.blocking_reason_id,
+        moderator_comment=product.moderation_comment,
         images=[
             ProductImageResponse(
                 id=img.id,
@@ -195,8 +195,17 @@ def send_event_to_moderation_sync(
     json_after: Optional[dict] = None,
     category_id: Optional[UUID] = None
 ):
-    """Сохраняет событие в outbox вместо прямой отправки."""
+    """Сохраняет событие в outbox (формат соответствует canon)."""
     from datetime import datetime, timezone
+    
+    # Маппинг event_type в canon (по спецификации Moderation)
+    event_map = {
+        "PRODUCT_CREATED": "CREATED",
+        "PRODUCT_EDITED": "EDITED",
+        "SKU_EDITED": "EDITED",
+        "PRODUCT_DELETED": "DELETED",
+    }
+    canon_event = event_map.get(event_type, "UNKNOWN")
     
     payload: dict = {
         "product_id": str(product_id),
@@ -216,8 +225,9 @@ def send_event_to_moderation_sync(
         if json_after:
             payload["json_after"] = json_after
     
+    # Формат события по canon
     event_payload = {
-        "event_type": event_type,
+        "event": canon_event,  # ← изменено с event_type
         "idempotency_key": str(idempotency_key),
         "occurred_at": datetime.now(timezone.utc).isoformat(),
         "payload": payload
@@ -225,7 +235,7 @@ def send_event_to_moderation_sync(
     
     save_to_outbox(
         db=db,
-        event_type=event_type,
+        event_type=event_type,  # сохраняем оригинальный тип для фильтрации
         target="moderation",
         url=f"{moderation_url}/api/v1/b2b/events",
         payload=event_payload,
@@ -478,7 +488,10 @@ def update_product(
             product.blocking_reason_id = None
             product.moderation_comment = None
     
-    # 7. Отправляем событие EDITED в Moderation
+    # 7. Сохраняем изменения (flush, не commit)
+    db.flush()
+    
+    # 8. Отправляем событие EDITED в Moderation (ДО commit)
     should_send_event = (
         product.status != ProductStatus.CREATED.value or 
         (hasattr(product, 'blocked') and product.blocked) or
@@ -518,6 +531,7 @@ def update_product(
             category_id=product.category_id
         )
     
+    # 9. Commit ПОСЛЕ отправки события
     db.commit()
     db.refresh(product)
     
@@ -537,7 +551,7 @@ def list_product_skus(
         error_response("NOT_FOUND", "Product not found", 404)
     
     if product.seller_id != current_seller.id:
-        error_response("FORBIDDEN", "Product does not belong to you", 403)
+        error_response("NOT_OWNER", "Product does not belong to you", 403)
     
     skus = db.query(SKU).options(
         selectinload(SKU.images),
@@ -593,7 +607,7 @@ def add_product_image(
         error_response("NOT_FOUND", "Product not found", 404)
     
     if product.seller_id != current_seller.id:
-        error_response("FORBIDDEN", "Product does not belong to you", 403)
+        error_response("NOT_OWNER", "Product does not belong to you", 403)
     
     db_image = ProductImage(
         product_id=product_id,
@@ -625,7 +639,7 @@ def update_product_image(
     
     product = db.query(Product).filter(Product.id == image.product_id).first()
     if product.seller_id != current_seller.id:
-        error_response("FORBIDDEN", "Product does not belong to you", 403)
+        error_response("NOT_OWNER", "Product does not belong to you", 403)
     
     if image_data.url is not None:
         image.url = image_data.url
@@ -655,7 +669,7 @@ def delete_product_image(
     
     product = db.query(Product).filter(Product.id == image.product_id).first()
     if product.seller_id != current_seller.id:
-        error_response("FORBIDDEN", "Product does not belong to you", 403)
+        error_response("NOT_OWNER", "Product does not belong to you", 403)
     
     db.delete(image)
     db.commit()
@@ -683,7 +697,7 @@ def delete_product(
         error_response("NOT_FOUND", "Product not found", 404)
     
     if product.seller_id != current_seller.id:
-       error_response("NOT_OWNER", "Product does not belong to the authenticated seller", 403)
+        error_response("NOT_OWNER", "Product does not belong to the authenticated seller", 403)
     
     if product.status == ProductStatus.HARD_BLOCKED.value:
         error_response("FORBIDDEN", "Cannot delete hard-blocked product", 403)
@@ -695,9 +709,9 @@ def delete_product(
     sku_ids = [sku.id for sku in skus]
     
     product.deleted = True
-    db.commit()
-    db.refresh(product)
+    db.flush()  # ← вместо commit
     
+    # Отправка событий (ДО commit)
     moderation_idempotency_key = uuid_module.uuid4()
     send_event_to_moderation_sync( 
         product_id=product.id,
@@ -718,5 +732,9 @@ def delete_product(
         db=db,
         event_type="PRODUCT_DELETED"
     )
+    
+    # Commit ПОСЛЕ отправки событий
+    db.commit()
+    db.refresh(product)
     
     return None

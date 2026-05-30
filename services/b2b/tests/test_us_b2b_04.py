@@ -436,7 +436,7 @@ class TestB2B04DeleteProduct:
         assert len(headers.get("X-Service-Key", "")) > 0
         
         payload = event.payload
-        assert payload["event_type"] == "PRODUCT_DELETED"
+        assert payload["event"] == "DELETED"
         assert "idempotency_key" in payload
         assert "occurred_at" in payload
         assert payload["payload"]["product_id"] == str(test_product_created.id)
