@@ -1,12 +1,12 @@
 # app/schemas/__init__.py
 
-# Auth
-from app.schemas.seller import (
-    SellerRegisterRequest,
-    SellerLoginRequest,
+# Auth (Seller)
+from app.schemas.auth import (
+    SellerCreate,
+    LoginRequest,
     RefreshRequest,
     TokenResponse,
-    SellerUpdateRequest,
+    SellerUpdate,
     SellerResponse,
 )
 
@@ -15,6 +15,7 @@ from app.schemas.category import (
     CategoryCreate,
     CategoryUpdate,
     CategoryResponse,
+    CategoryWithChildrenResponse,  # ← добавить
     CategoryTreeResponse,
 )
 
@@ -23,14 +24,13 @@ from app.schemas.product import (
     ProductCreate,
     ProductUpdate,
     ProductResponse,
+    ProductDetailResponse,  # ← добавить
     ProductStatus,
     ProductPublicResponse,
     ProductPublicShortResponse,
     ProductShortResponse,
     ProductPaginatedResponse,
     ProductPublicPaginatedResponse,
-    FieldReport,
-    BlockingReason,
     ImageAttachRequest,
     ImageUpdateRequest,
     BatchProductIdsRequest,
@@ -42,15 +42,22 @@ from app.schemas.sku import (
     SKUUpdate,
     SKUResponse,
     SKUPublicResponse,
-    SKUInProduct,
+    # SKUInProduct — удален (не существует)
     SKUImageCreate,
     SKUImageResponse,
 )
 
-# Characteristic (по спецификации B2B)
+# Common (B2B)
 from app.schemas.common import (
-    CharacteristicValue,
-    CharacteristicValueResponse,
+    CategoryRef,               
+    Characteristic,           
+    CharacteristicResponse,   
+    Error,                    
+    ProductImageCreate,       
+    ProductImageResponse,     
+    ImageEntityType,          
+    ImageUploadResponse,
+    PaginatedResponse      
 )
 
 # Invoice
@@ -65,13 +72,10 @@ from app.schemas.invoice import (
     InvoicePaginatedResponse,
 )
 
-# Inventory (reserve/unreserve/fulfill)
+# Inventory
 from app.schemas.reserve import (
     ReserveRequest,
-    ReserveSuccessResponse,
-    ReserveErrorResponse,
-    UnreserveRequest,
-    UnreserveSuccessResponse,
+    ReserveResponse,
     InventoryOrderRequest,
     InventoryOrderResponse,
 )
@@ -80,26 +84,18 @@ from app.schemas.reserve import (
 from app.schemas.moderation import (
     ModerationEventRequest,
     ModerationEventType,
-)
-
-# Common
-from app.schemas.common import (
-    CategoryRef,
-    Error,
-    Pagination,
-    ProductImageCreate,
-    ProductImageResponse,
-    ImageUploadResponse,
+    FieldReport,  # ← добавить
+    BlockingReason,  # ← добавить
 )
 
 
 __all__ = [
     # Auth
-    "SellerRegisterRequest",
-    "SellerLoginRequest",
+    "SellerCreate",
+    "LoginRequest",
     "RefreshRequest",
     "TokenResponse",
-    "SellerUpdateRequest",
+    "SellerUpdate",
     "SellerResponse",
     
     # Category
@@ -107,19 +103,19 @@ __all__ = [
     "CategoryUpdate",
     "CategoryResponse",
     "CategoryTreeResponse",
+    "CategoryWithChildrenResponse",
     
     # Product
     "ProductCreate",
     "ProductUpdate",
     "ProductResponse",
+    "ProductDetailResponse",
     "ProductStatus",
     "ProductPublicResponse",
     "ProductPublicShortResponse",
     "ProductShortResponse",
     "ProductPaginatedResponse",
     "ProductPublicPaginatedResponse",
-    "FieldReport",
-    "BlockingReason",
     "ImageAttachRequest",
     "ImageUpdateRequest",
     "BatchProductIdsRequest",
@@ -129,13 +125,18 @@ __all__ = [
     "SKUUpdate",
     "SKUResponse",
     "SKUPublicResponse",
-    "SKUInProduct",
     "SKUImageCreate",
     "SKUImageResponse",
     
-    # Characteristic
-    "CharacteristicValue",
-    "CharacteristicValueResponse",
+    # Common
+    "Characteristic",
+    "CharacteristicResponse",
+    "ProductImageCreate",
+    "PaginatedResponse",
+    "ProductImageResponse",
+    "ImageUploadResponse",
+    "ImageEntityType"
+    "Error",
     
     # Invoice
     "InvoiceCreate",
@@ -149,22 +150,13 @@ __all__ = [
     
     # Inventory
     "ReserveRequest",
-    "ReserveSuccessResponse",
-    "ReserveErrorResponse",
-    "UnreserveRequest",
-    "UnreserveSuccessResponse",
+    "ReserveResponse",
     "InventoryOrderRequest",
     "InventoryOrderResponse",
     
     # Moderation
     "ModerationEventRequest",
     "ModerationEventType",
-    
-    # Common
-    "CategoryRef",
-    "Error",
-    "Pagination",
-    "ProductImageCreate",
-    "ProductImageResponse",
-    "ImageUploadResponse",
+    "FieldReport",
+    "BlockingReason",
 ]

@@ -1,3 +1,4 @@
+# app/models/__init__.py
 from app.models.base import Base
 from app.models.seller import Seller
 from app.models.category import Category
@@ -8,8 +9,10 @@ from app.models.reservation import SKUReservation
 from app.models.invoice import Invoice, InvoiceItem
 from app.models.outbox import OutboxEvent
 from app.models.history import ProductStatusHistory
-from app.models.unreserve_operation import UnreserveOperation 
-from app.models.fulfill_operation import FulfillOperation
+from app.models.unreserve_operation import UnreserveOperation, UnreserveOperationItem  # ← добавить
+from app.models.fulfill_operation import FulfillOperation, FulfillOperationItem  # ← добавить
+from app.models.image import Image  # ← добавить
+
 
 __all__ = [
     "Base",
@@ -30,5 +33,8 @@ __all__ = [
     "OutboxEvent",
     "ProductStatusHistory",
     "UnreserveOperation",
-    "FulfillOperation", 
+    "UnreserveOperationItem",  # ← добавить
+    "FulfillOperation",
+    "FulfillOperationItem",    # ← добавить
+    "Image",                   # ← добавить
 ]

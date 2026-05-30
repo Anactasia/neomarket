@@ -28,11 +28,13 @@ def check_admin(current_seller: Seller):
 
 
 def compute_materialized_path(category: Category, db: Session) -> str:
-    """Вычисляет materialized path, например 'electronics/smartphones'"""
+    """Вычисляет materialized path на основе slug или id"""
     path_parts = []
     current = category
     while current:
-        path_parts.insert(0, current.name)
+        # Используем slug, если есть, иначе id
+        identifier = current.slug if current.slug else str(current.id)
+        path_parts.insert(0, identifier)
         if current.parent_id:
             current = db.query(Category).filter(Category.id == current.parent_id).first()
         else:
@@ -92,6 +94,20 @@ def update_category(
         error_response("NOT_FOUND", "Category not found", 404)
     
     update_data = category_update.model_dump(exclude_unset=True)
+    
+    # Проверка на смену parent_id
+    old_parent_id = category.parent_id
+    new_parent_id = update_data.get('parent_id')
+    
+    if new_parent_id is not None and new_parent_id != old_parent_id:
+        if new_parent_id:
+            parent = db.query(Category).filter(Category.id == new_parent_id).first()
+            if not parent:
+                error_response("PARENT_NOT_FOUND", "Parent category not found", 404)
+            category.level = parent.level + 1
+        else:
+            category.level = 0
+    
     for field, value in update_data.items():
         setattr(category, field, value)
     
@@ -115,12 +131,16 @@ def delete_category(
     db: Session = Depends(get_db),
     current_seller: Seller = Depends(get_current_seller)
 ):
-    """[ADMIN ONLY] Удалить категорию"""
+    """[ADMIN ONLY] Удалить категорию (только если нет товаров)"""
     check_admin(current_seller)
     
     category = db.query(Category).filter(Category.id == category_id).first()
     if not category:
         error_response("NOT_FOUND", "Category not found", 404)
+    
+    # Проверка на наличие товаров в категории
+    if category.products and len(category.products) > 0:
+        error_response("CONFLICT", "Category has products", 409)
     
     db.delete(category)
     db.commit()

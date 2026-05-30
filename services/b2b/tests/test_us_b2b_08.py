@@ -462,10 +462,10 @@ class TestB2B08ReserveUnreserve:
         assert sku.reserved_quantity == 2
         assert sku.stock_quantity == 10
 
-    def test_reserve_missing_sku_returns_400(
+    def test_reserve_missing_sku_returns_404(
         self, client, db_session, service_key
     ):
-        """Резервирование несуществующего SKU → 400"""
+        """Резервирование несуществующего SKU → 404"""
         response = client.post(
             "/api/v1/inventory/reserve",
             json={
@@ -478,9 +478,9 @@ class TestB2B08ReserveUnreserve:
             headers={"X-Service-Key": service_key}
         )
         
-        assert response.status_code == 400
+        assert response.status_code == 404
         
-    def test_unreserve_missing_sku_returns_400(
+    def test_unreserve_missing_sku_returns_404(
         self, client, db_session, service_key
     ):
         """Снятие резерва несуществующего SKU → 400"""
@@ -495,7 +495,7 @@ class TestB2B08ReserveUnreserve:
             headers={"X-Service-Key": service_key}
         )
         
-        assert response.status_code == 400
+        assert response.status_code == 404
 
     def test_reserve_without_service_key_returns_401(self, client):
         """Резервирование без X-Service-Key → 401"""

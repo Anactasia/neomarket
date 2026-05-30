@@ -397,7 +397,7 @@ class TestB2B02CreateSKU:
 
         assert response.status_code == 403
         error_data = response.json()
-        assert error_data["code"] == "NOT_OWNER"  # ← FORBIDDEN → NOT_OWNER
+        assert error_data["code"] == "NOT_OWNER"  
         assert "does not belong" in error_data["message"].lower()
     
     def test_first_sku_sends_created_event_to_moderation(

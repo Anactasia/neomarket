@@ -18,7 +18,8 @@ from app.models import (
     ProductCharacteristic, SKUCharacteristic, SKUImage,
     SKUReservation, Invoice, InvoiceItem, OutboxEvent,
     ProductStatusHistory, Characteristic, CharacteristicValue,
-    CategoryCharacteristic, UnreserveOperation, FulfillOperation
+    CategoryCharacteristic, UnreserveOperation, FulfillOperation,
+    Image, FulfillOperationItem, UnreserveOperationItem
 )
 from app.core.security import create_access_token
 
@@ -29,10 +30,8 @@ USE_POSTGRES = os.getenv("USE_POSTGRES_FOR_TESTS", "false").lower() == "true"
 def get_test_engine():
     """Создаёт engine для тестовой БД"""
     if USE_POSTGRES or IN_CI:
-        # Сначала пробуем взять URL из переменной окружения
         database_url = os.getenv("DATABASE_URL")
         if not database_url:
-            # Если нет, используем значения по умолчанию
             if IN_CI:
                 database_url = "postgresql://postgres:postgres@postgres:5432/neomarket_b2b"
             else:
@@ -47,17 +46,23 @@ def get_test_engine():
             poolclass=StaticPool,
         )
 
+
 engine = get_test_engine()
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
+
 # -------------------------
-# DB setup
+# DB setup - ПРОСТОЙ ВАРИАНТ
 # -------------------------
 @pytest.fixture(scope="session", autouse=True)
 def setup_database():
-    Base.metadata.create_all(bind=engine)
+    """Очищает таблицы в БД после тестов (создаёт Alembic)"""
     yield
-    Base.metadata.drop_all(bind=engine)
+    # После тестов очищаем, игнорируя ошибки
+    try:
+        Base.metadata.drop_all(bind=engine, checkfirst=True)
+    except Exception as e:
+        print(f"Ignoring cleanup error: {e}")
 
 # -------------------------
 # Transaction per test
@@ -72,6 +77,7 @@ def db_session():
     transaction.rollback()
     connection.close()
 
+
 # -------------------------
 # Test client
 # -------------------------
@@ -82,6 +88,7 @@ def client(db_session):
     app.dependency_overrides[get_db] = override_get_db
     yield TestClient(app)
     app.dependency_overrides.clear()
+
 
 # -------------------------
 # Seed categories
@@ -98,6 +105,7 @@ def create_category_tree(db, data, parent_id=None, level=0):
     for child in data.get("children", []):
         create_category_tree(db, child, category.id, level + 1)
 
+
 @pytest.fixture
 def seeded_categories(db_session):
     try:
@@ -111,6 +119,7 @@ def seeded_categories(db_session):
         db_session.add(test_cat)
         db_session.commit()
     return True
+
 
 # -------------------------
 # Fixtures
@@ -126,22 +135,31 @@ def test_seller(db_session):
         inn="123456789012",
         phone="+79990000000",
         hashed_password="hashed_password_123",
-        is_active=True
+        is_active=True,
+        role="SELLER"
     )
     db_session.add(seller)
     db_session.commit()
     db_session.refresh(seller)
     return seller
 
+
 @pytest.fixture
 def test_category(db_session, seeded_categories):
     category = db_session.query(Category).first()
     if not category:
-        category = Category(id=uuid4(), name="Test Category", level=0, is_active=True)
+        category = Category(
+            id=uuid4(),
+            name="Test Category",
+            slug="test-category",
+            level=0,
+            is_active=True
+        )
         db_session.add(category)
         db_session.commit()
         db_session.refresh(category)
     return category
+
 
 @pytest.fixture
 def test_product(db_session, test_seller, test_category):
@@ -153,12 +171,14 @@ def test_product(db_session, test_seller, test_category):
         seller_id=test_seller.id,
         category_id=test_category.id,
         status="CREATED",
-        deleted=False
+        deleted=False,
+        characteristics_json=[]
     )
     db_session.add(product)
     db_session.commit()
     db_session.refresh(product)
     return product
+
 
 @pytest.fixture
 def test_sku(db_session, test_product):
@@ -179,6 +199,7 @@ def test_sku(db_session, test_product):
     db_session.refresh(sku)
     return sku
 
+
 # -------------------------
 # Auth fixtures
 # -------------------------
@@ -186,6 +207,7 @@ def test_sku(db_session, test_product):
 def auth_headers(test_seller):
     access_token = create_access_token(data={"sub": str(test_seller.id)})
     return {"Authorization": f"Bearer {access_token}"}
+
 
 @pytest.fixture
 def service_key_headers():

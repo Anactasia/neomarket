@@ -4,11 +4,11 @@ from typing import Optional, List
 from datetime import datetime
 from uuid import UUID
 
-from app.schemas.common import CharacteristicValue, CharacteristicValueResponse
+from app.schemas.common import Characteristic, CharacteristicResponse
 
 
 class SKUImageCreate(BaseModel):
-    """Изображение для создания/обновления SKU"""
+    """Изображение для создания/обновления SKU (по спецификации B2B)"""
     url: str = Field(..., description="Ссылка на изображение в S3")
     ordering: int = Field(0, description="Порядок отображения")
 
@@ -24,14 +24,14 @@ class SKUImageResponse(BaseModel):
 
 
 class SKUBase(BaseModel):
-    """Базовая схема SKU"""
+    """Внутренняя базовая схема SKU (НЕ экспортируется)"""
     name: str = Field(..., min_length=1, max_length=255)
     price: int = Field(..., ge=0, description="Цена в копейках")
     cost_price: Optional[int] = Field(None, ge=0, description="Себестоимость в копейках")
     discount: int = Field(0, ge=0, description="Скидка в копейках")
     article: Optional[str] = Field(None, max_length=100)
     images: List[SKUImageCreate] = Field(default_factory=list)
-    characteristics: List[CharacteristicValue] = Field(default_factory=list)
+    characteristics: List[Characteristic] = Field(default_factory=list)  # ← исправлено
 
     @field_validator('name')
     @classmethod
@@ -63,19 +63,19 @@ class SKUBase(BaseModel):
 
 
 class SKUCreate(SKUBase):
-    """Создание SKU"""
+    """Создание SKU (по спецификации B2B)"""
     product_id: UUID
 
 
 class SKUUpdate(BaseModel):
-    """Обновление SKU (все поля опциональны)"""
+    """Обновление SKU (все поля опциональны) (по спецификации B2B)"""
     name: Optional[str] = Field(None, min_length=1, max_length=255)
     price: Optional[int] = Field(None, ge=0)
     cost_price: Optional[int] = Field(None, ge=0)
     discount: Optional[int] = Field(None, ge=0)
     article: Optional[str] = None
     images: Optional[List[SKUImageCreate]] = None
-    characteristics: Optional[List[CharacteristicValue]] = None
+    characteristics: Optional[List[Characteristic]] = None  # ← исправлено
 
     @field_validator('name')
     @classmethod
@@ -86,7 +86,7 @@ class SKUUpdate(BaseModel):
 
 
 class SKUResponse(BaseModel):
-    """Полный ответ SKU (seller view, с cost_price и reserved_quantity)"""
+    """Полный ответ SKU (seller view) (по спецификации B2B)"""
     id: UUID
     product_id: UUID
     name: str
@@ -98,16 +98,16 @@ class SKUResponse(BaseModel):
     reserved_quantity: int = 0
     article: Optional[str] = None
     images: List[SKUImageResponse] = []
-    characteristics: List[CharacteristicValueResponse] = []  # ← единый тип
+    characteristics: List[CharacteristicResponse] = []  # ← исправлено
     created_at: datetime
-    updated_at: Optional[datetime] = None
+    updated_at: datetime  # ← исправлено (обязательное)
 
     class Config:
         from_attributes = True
 
 
 class SKUPublicResponse(BaseModel):
-    """Публичный SKU (без cost_price и reserved_quantity, для B2C)"""
+    """Публичный SKU (для B2C витрины) (по спецификации B2B)"""
     id: UUID
     product_id: UUID
     name: str
@@ -117,26 +117,10 @@ class SKUPublicResponse(BaseModel):
     active_quantity: int
     article: Optional[str] = None
     images: List[SKUImageResponse] = []
-    characteristics: List[CharacteristicValueResponse] = []
+    characteristics: List[CharacteristicResponse] = []  # ← исправлено
 
     class Config:
         from_attributes = True
 
 
-class SKUInProduct(BaseModel):
-    """SKU внутри Product (для ответа B2C каталог)"""
-    id: UUID
-    name: str
-    price: int
-    discount: int = 0
-    images: List[str] = [] 
-    active_quantity: int
-    characteristics: List[CharacteristicValue] = []
-
-    class Config:
-        from_attributes = True
-        populate_by_name = True
-
-
-# Для обратной совместимости
-SKU = SKUResponse
+# SKUInProduct — УДАЛЕН (нет в спецификации B2B)

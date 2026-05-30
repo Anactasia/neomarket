@@ -69,3 +69,16 @@ def get_current_seller_optional(
         return get_current_seller(credentials, db)
     except HTTPException:
         return None
+
+
+def check_admin(current_seller: Seller = Depends(get_current_seller)) -> Seller:
+    """
+    Проверка прав администратора.
+    Использовать в эндпоинтах, доступных только администраторам.
+    """
+    if current_seller.role != "ADMIN":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"code": "FORBIDDEN", "message": "Admin access required"}
+        )
+    return current_seller

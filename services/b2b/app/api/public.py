@@ -1,25 +1,27 @@
-from fastapi import APIRouter, Depends, Header, HTTPException, status, Query
+import uuid
+from fastapi import APIRouter, Depends, Header, HTTPException, status, Query, Request
 from sqlalchemy.orm import Session, selectinload
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from typing import List, Optional, Dict
 from uuid import UUID
 import os
 
 from app.database import get_db
-from app.models.product import Product
-from app.models.sku import SKU, SKUCharacteristic
+from app.models.product import Product, ProductImage
+from app.models.sku import SKU, SKUCharacteristic, SKUImage
 from app.schemas.product import (
     ProductPublicShortResponse,
     ProductPublicResponse,
     ProductPublicPaginatedResponse,
     SKUPublicResponse,
     BatchProductIdsRequest,
-    ProductStatus
+    ProductStatus,
+    BlockingReason,
+    FieldReport
 )
-from app.schemas.sku import SKUImageResponse
-from app.api.products import product_to_public_response
+from app.schemas.sku import SKUImageResponse, SKUPublicResponse as SKUPubResponse
+from app.schemas.common import CharacteristicResponse, ProductImageResponse
 from app.dependencies.service_keys import verify_b2c_service_key
-from app.schemas.common import CharacteristicValueResponse, CharacteristicValue
 
 router = APIRouter()
 
@@ -30,6 +32,81 @@ def error_response(code: str, message: str, status_code: int = 400):
         detail={"code": code, "message": message}
     )
 
+
+def _extract_characteristic_value(char) -> str:
+    """Извлекает значение характеристики в строковом виде"""
+    if hasattr(char, 'value_string') and char.value_string:
+        return char.value_string
+    elif hasattr(char, 'value_int') and char.value_int is not None:
+        return str(char.value_int)
+    elif hasattr(char, 'value_float') and char.value_float is not None:
+        return str(char.value_float)
+    elif hasattr(char, 'value_bool') and char.value_bool is not None:
+        return str(char.value_bool).lower()
+    return ""
+
+
+def product_to_public_response(product: Product, db: Session) -> ProductPublicResponse:
+    """Преобразует Product в публичный ProductPublicResponse (без cost_price/reserved_quantity)"""
+    
+    # Формируем SKU без чувствительных полей
+    skus = []
+    for sku in product.skus:
+        if sku.active_quantity > 0:  # только доступные SKU
+            skus.append(SKUPubResponse(
+                id=sku.id,
+                product_id=sku.product_id,
+                name=sku.name,
+                price=sku.price,
+                discount=sku.discount or 0,
+                stock_quantity=sku.stock_quantity,
+                active_quantity=sku.active_quantity,
+                article=sku.article,
+                images=[
+                    SKUImageResponse(
+                        id=img.id,
+                        url=img.url,
+                        ordering=img.sort_order
+                    ) for img in sku.images
+                ],
+                characteristics=[
+                    CharacteristicResponse(
+                        id=char.id,
+                        name=char.characteristic.name if char.characteristic else "Unknown",
+                        value=_extract_characteristic_value(char)
+                    ) for char in sku.characteristics if char.characteristic
+                ]
+            ))
+    
+    return ProductPublicResponse(
+        id=product.id,
+        seller_id=product.seller_id,
+        category_id=product.category_id,
+        title=product.title,
+        slug=product.slug or "",
+        description=product.description or "",
+        status=ProductStatus(product.status),
+        images=[
+            ProductImageResponse(
+                id=img.id,
+                url=img.url,
+                ordering=img.sort_order
+            ) for img in product.images
+        ],
+        characteristics=[
+            CharacteristicResponse(
+                id=char.get("id", uuid.uuid4()),
+                name=char.get("name", "Unknown"),
+                value=char.get("value", "")
+            ) for char in (product.characteristics_json or [])
+        ],
+        skus=skus,
+        created_at=product.created_at,
+        updated_at=product.updated_at or product.created_at
+    )
+
+
+# ───────────────────── PUBLIC CATALOG (для B2C) ─────────────────────
 
 # ───────────────────── PUBLIC CATALOG (для B2C) ─────────────────────
 
@@ -43,14 +120,19 @@ def get_public_products(
     max_price: Optional[int] = None,
     seller_id: Optional[UUID] = None,
     sort: str = "created_desc",
-    characteristics: Optional[str] = Query(None, description="Фильтр по характеристикам в формате key=val1,val2&key2=val3"),
     x_service_key: Optional[str] = Header(None, alias="X-Service-Key"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    request: Request = None
 ):
     """
-    Публичный каталог товаров для B2C (витрина).
+    Публичный каталог товаров для B2C (витрина) - GET /api/v1/public/products
     
     Авторизация: X-Service-Key (межсервисный вызов)
+    
+    Фильтр по характеристикам (опционально):
+    - filters[color]=red → color=red
+    - filters[color]=red,blue → color=red OR color=blue
+    - filters[color]=red&filters[size]=L → color=red AND size=L
     """
     if x_service_key is None or not verify_b2c_service_key(x_service_key):
         error_response("UNAUTHORIZED", "X-Service-Key is required", 401)
@@ -65,31 +147,34 @@ def get_public_products(
     if sort not in valid_sorts:
         sort = "created_desc"
     
-    # Фильтр по характеристикам
-    if characteristics:
-        try:
-            char_filters: Dict[str, List[str]] = {}
-            for pair in characteristics.split("&"):
-                if "=" in pair:
-                    key, values_str = pair.split("=", 1)
-                    char_filters[key] = values_str.split(",")
-            
-            for char_key, char_values in char_filters.items():
-                from sqlalchemy import or_
-                from sqlalchemy import text
-                
-                value_conditions = []
-                for val in char_values:
-                    value_conditions.append(
-                        text(f"jsonb_path_exists(characteristics_json, '$[*] ? (@.name == \"{char_key}\" && @.value == \"{val}\")')")
-                    )
-                
-                if value_conditions:
-                    char_condition = or_(*value_conditions)
-                    query = query.filter(char_condition)
-                    
-        except Exception as e:
-            error_response("INVALID_REQUEST", f"Invalid characteristics format: {str(e)}", 400)
+    # ========== ФИЛЬТР ПО ХАРАКТЕРИСТИКАМ (ОПЦИОНАЛЬНО) ==========
+    # Парсим фильтры из query параметров вида filters[color]=red
+    characteristic_filters: Dict[str, List[str]] = {}
+    if request:
+        for key, value in request.query_params.items():
+            if key.startswith("filters[") and key.endswith("]"):
+                char_name = key[8:-1]  # 'filters[color]' → 'color'
+                # Поддерживаем значения через запятую: red,blue
+                values_list = [v.strip() for v in value.split(",")]
+                if char_name not in characteristic_filters:
+                    characteristic_filters[char_name] = []
+                characteristic_filters[char_name].extend(values_list)
+    
+    # Применяем фильтры по характеристикам (через jsonb_array_elements)
+    for char_name, values in characteristic_filters.items():
+        if values:
+            # Используем EXISTS с jsonb_array_elements для поиска
+            from sqlalchemy import text
+            conditions = []
+            for val in values:
+                # Безопасный поиск в JSON массиве
+                condition = text(
+                    f"EXISTS (SELECT 1 FROM json_array_elements(products.characteristics_json) AS elem "
+                    f"WHERE elem->>'name' = '{char_name}' AND elem->>'value' = '{val}')"
+                )
+                conditions.append(condition)
+            if conditions:
+                query = query.filter(or_(*conditions))
     
     if category_id:
         query = query.filter(Product.category_id == category_id)
@@ -104,17 +189,16 @@ def get_public_products(
         )
     
     if min_price is not None:
-        query = query.filter(Product.skus.any(SKU.price >= min_price))
+        query = query.filter(Product.skus.any(SKU.price >= min_price, SKU.active_quantity > 0))
     
     if max_price is not None:
-        query = query.filter(Product.skus.any(SKU.price <= max_price))
+        query = query.filter(Product.skus.any(SKU.price <= max_price, SKU.active_quantity > 0))
     
     total_count = query.count()
     
     # Сортировка
     if sort == "price_asc":
         min_price_subq = db.query(
-            SKU.product_id,
             func.min(SKU.price).label("min_price")
         ).filter(
             SKU.product_id == Product.id,
@@ -123,7 +207,6 @@ def get_public_products(
         query = query.order_by(min_price_subq.asc(), Product.id.desc())
     elif sort == "price_desc":
         min_price_subq = db.query(
-            SKU.product_id,
             func.min(SKU.price).label("min_price")
         ).filter(
             SKU.product_id == Product.id,
@@ -136,14 +219,15 @@ def get_public_products(
         query = query.order_by(func.random(), Product.id.desc())
     
     products = query.options(
-        selectinload(Product.skus),
+        selectinload(Product.skus).selectinload(SKU.images),
+        selectinload(Product.skus).selectinload(SKU.characteristics).selectinload(SKUCharacteristic.characteristic),
         selectinload(Product.images)
     ).offset(offset).limit(limit).all()
     
     result_items = []
     for product in products:
         skus_with_stock = [sku for sku in product.skus if sku.active_quantity > 0]
-        min_price_val = min([sku.price for sku in skus_with_stock], default=0)
+        min_price_val = min([sku.price for sku in skus_with_stock], default=0) if skus_with_stock else 0
         cover_image = product.images[0].url if product.images else None
         
         result_items.append(ProductPublicShortResponse(
@@ -164,20 +248,23 @@ def get_public_products(
         offset=offset
     )
 
-
 @router.post("/products/batch", response_model=List[ProductPublicResponse])
 def get_public_products_batch(
     request: BatchProductIdsRequest,
     x_service_key: Optional[str] = Header(None, alias="X-Service-Key"),
     db: Session = Depends(get_db)
 ):
-    """Batch-запрос публичных карточек товаров по списку ID."""
+    """Batch-запрос публичных карточек товаров по списку ID - POST /api/v1/public/products/batch"""
     
     if x_service_key is None or not verify_b2c_service_key(x_service_key):
         error_response("UNAUTHORIZED", "X-Service-Key is required", 401)
     
+    if len(request.product_ids) > 100:
+        error_response("INVALID_REQUEST", "Maximum 100 product IDs per request", 400)
+    
     products = db.query(Product).options(
-        selectinload(Product.skus),
+        selectinload(Product.skus).selectinload(SKU.images),
+        selectinload(Product.skus).selectinload(SKU.characteristics).selectinload(SKUCharacteristic.characteristic),
         selectinload(Product.images)
     ).filter(
         Product.id.in_(request.product_ids),
@@ -186,11 +273,7 @@ def get_public_products_batch(
         Product.skus.any(SKU.active_quantity > 0)
     ).all()
     
-    result = []
-    for product in products:
-        result.append(product_to_public_response(product, db))
-    
-    return result
+    return [product_to_public_response(product, db) for product in products]
 
 
 @router.get("/products/{product_id}", response_model=ProductPublicResponse)
@@ -199,15 +282,15 @@ def get_public_product(
     x_service_key: Optional[str] = Header(None, alias="X-Service-Key"),
     db: Session = Depends(get_db)
 ):
-    """Публичная карточка товара для витрины."""
+    """Публичная карточка товара для витрины - GET /api/v1/public/products/{product_id}"""
     
     if x_service_key is None or not verify_b2c_service_key(x_service_key):
         error_response("UNAUTHORIZED", "X-Service-Key is required", 401)
     
     product = db.query(Product).options(
-        selectinload(Product.skus),
-        selectinload(Product.images),
-        selectinload(Product.characteristics)
+        selectinload(Product.skus).selectinload(SKU.images),
+        selectinload(Product.skus).selectinload(SKU.characteristics).selectinload(SKUCharacteristic.characteristic),
+        selectinload(Product.images)
     ).filter(
         Product.id == product_id,
         Product.status == ProductStatus.MODERATED.value,
@@ -228,7 +311,7 @@ def get_public_similar_products(
     x_service_key: Optional[str] = Header(None, alias="X-Service-Key"),
     db: Session = Depends(get_db)
 ):
-    """Похожие товары (случайная выборка из той же категории)."""
+    """Похожие товары (случайная выборка из той же категории) - GET /api/v1/public/products/{product_id}/similar"""
     
     if x_service_key is None or not verify_b2c_service_key(x_service_key):
         error_response("UNAUTHORIZED", "X-Service-Key is required", 401)
@@ -256,7 +339,7 @@ def get_public_similar_products(
     result = []
     for p in similar:
         skus_with_stock = [sku for sku in p.skus if sku.active_quantity > 0]
-        min_price_val = min([sku.price for sku in skus_with_stock], default=0)
+        min_price_val = min([sku.price for sku in skus_with_stock], default=0) if skus_with_stock else 0
         cover_image = p.images[0].url if p.images else None
         
         result.append(ProductPublicShortResponse(
@@ -279,7 +362,7 @@ def get_public_sku(
     x_service_key: Optional[str] = Header(None, alias="X-Service-Key"),
     db: Session = Depends(get_db)
 ):
-    """Публичный SKU для витрины (без cost_price, reserved_quantity)."""
+    """Публичный SKU для витрины (без cost_price, reserved_quantity) - GET /api/v1/public/skus/{sku_id}"""
     
     if x_service_key is None or not verify_b2c_service_key(x_service_key):
         error_response("UNAUTHORIZED", "X-Service-Key is required", 401)
@@ -302,7 +385,7 @@ def get_public_sku(
         product_id=sku.product_id,
         name=sku.name,
         price=sku.price,
-        discount=sku.discount,
+        discount=sku.discount or 0,
         stock_quantity=sku.stock_quantity,
         active_quantity=sku.active_quantity,
         article=sku.article,
@@ -314,10 +397,10 @@ def get_public_sku(
             ) for img in sku.images
         ],
         characteristics=[
-            CharacteristicValueResponse(
+            CharacteristicResponse(
                 id=char.id,
-                name=char.characteristic.name if char.characteristic else "Characteristic",
-                value=char.value_string or ""
-            ) for char in sku.characteristics
+                name=char.characteristic.name if char.characteristic else "Unknown",
+                value=_extract_characteristic_value(char)
+            ) for char in sku.characteristics if char.characteristic
         ]
     )

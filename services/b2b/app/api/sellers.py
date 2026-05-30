@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.seller import Seller
-from app.schemas.seller import SellerResponse, SellerUpdateRequest
+from app.schemas.seller import SellerResponse, SellerUpdate  # ← исправлено
 from app.dependencies.auth import get_current_seller
 
 router = APIRouter()
@@ -36,7 +36,7 @@ def get_my_seller_profile(
 
 @router.patch("/me", response_model=SellerResponse)
 def update_my_seller_profile(
-    seller_update: SellerUpdateRequest,
+    seller_update: SellerUpdate,  # ← исправлено
     db: Session = Depends(get_db),
     current_seller: Seller = Depends(get_current_seller)
 ):

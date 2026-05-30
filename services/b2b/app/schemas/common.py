@@ -1,9 +1,8 @@
-"""
-Общие Pydantic схемы, переиспользуемые между модулями
-"""
+# app/schemas/common.py
 from pydantic import BaseModel, Field
-from typing import Optional, List, Union
+from typing import Optional, List, Union, TypeVar, Generic
 from datetime import datetime
+from enum import Enum
 from uuid import UUID
 
 
@@ -13,33 +12,18 @@ class CategoryRef(BaseModel):
     name: str
     parent_id: Optional[UUID] = None
     level: int
-    path: str
+    path: List[str]
 
 
-class Image(BaseModel):
-    """Изображение товара (для запроса)"""
-    url: str
-    ordering: int = 0
-
-
-class CharacteristicValue(BaseModel):
+class Characteristic(BaseModel):
     """Характеристика для запроса (по спецификации B2B)"""
     name: str = Field(..., max_length=255)
-    value: Union[str, int, float, bool] = Field(..., description="Значение характеристики")
+    value: str = Field(..., description="Значение характеристики")
 
 
-class CharacteristicValueResponse(BaseModel):
+class CharacteristicResponse(Characteristic):
     """Характеристика в ответе (с id, по спецификации B2B)"""
     id: UUID
-    name: str = Field(..., max_length=255)
-    value: Union[str, int, float, bool] = Field(..., description="Значение характеристики")
-
-
-class Pagination(BaseModel):
-    """Пагинация"""
-    limit: int
-    offset: int
-    total: int
 
 
 class Error(BaseModel):
@@ -62,13 +46,27 @@ class ProductImageResponse(BaseModel):
     ordering: int
 
 
+class ImageEntityType(str, Enum):
+    PRODUCT = "PRODUCT"
+    SKU = "SKU"
+
+
 class ImageUploadResponse(BaseModel):
-    """Ответ на загрузку изображения"""
     id: UUID
     url: str
     ordering: int
-    entity_type: str  # PRODUCT или SKU
+    entity_type: ImageEntityType
     entity_id: Optional[UUID] = None
-    
-    class Config:
-        from_attributes = True
+
+
+# ========== УНИВЕРСАЛЬНАЯ ПАГИНАЦИЯ ==========
+
+T = TypeVar('T')
+
+
+class PaginatedResponse(BaseModel, Generic[T]):
+    """Универсальный пагинированный ответ (по канону)"""
+    items: List[T]
+    total_count: int
+    limit: int
+    offset: int

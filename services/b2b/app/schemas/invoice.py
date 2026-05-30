@@ -22,7 +22,7 @@ class InvoiceItemResponse(BaseModel):
     id: UUID
     sku_id: UUID
     quantity: int
-    accepted_quantity: Optional[int] = None
+    accepted_quantity: int = Field(..., description="Фактически принятое количество")
     
     class Config:
         from_attributes = True

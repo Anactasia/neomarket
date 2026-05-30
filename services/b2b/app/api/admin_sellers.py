@@ -1,17 +1,20 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 from uuid import UUID
 
 from app.database import get_db
 from app.models.seller import Seller
 from app.schemas.seller import (
     SellerResponse,
-    SellerRegisterRequest,  
-    SellerUpdateRequest     
+    SellerCreate,
+    SellerUpdate
 )
-from app.dependencies.auth import get_current_seller
-from app.models.seller import Seller as SellerModel
+from app.schemas.common import PaginatedResponse
+from app.dependencies.auth import get_current_seller, check_admin
+from app.core.security import hash_password
+
+router = APIRouter(prefix="/admin/sellers", tags=["Admin Sellers"])
 
 
 def error_response(code: str, message: str, status_code: int = 400):
@@ -21,25 +24,19 @@ def error_response(code: str, message: str, status_code: int = 400):
     )
 
 
-def check_admin(current_seller: SellerModel):
-    """Проверка прав администратора"""
-    # TODO: добавить поле role или is_admin в модель Seller
-    # Пока заглушка — только для внутреннего использования
-    pass
-
-
-router = APIRouter(prefix="/admin/sellers", tags=["Admin Sellers"])
+class PaginatedSellers(PaginatedResponse):
+    items: List[SellerResponse]
 
 
 @router.post("/", response_model=SellerResponse, status_code=status.HTTP_201_CREATED)
 def create_seller(
-    seller: SellerRegisterRequest,
+    seller: SellerCreate,
     db: Session = Depends(get_db),
-    current_seller: SellerModel = Depends(get_current_seller)
+    current_seller: Seller = Depends(get_current_seller)
 ):
-    """
-    [ADMIN ONLY] Создать нового продавца.
-    """
+    """[ADMIN ONLY] Создать нового продавца - POST /api/v1/admin/sellers/"""
+    check_admin(current_seller)
+    
     # Проверка на дубликат ИНН
     existing = db.query(Seller).filter(Seller.inn == seller.inn).first()
     if existing:
@@ -52,7 +49,7 @@ def create_seller(
     
     db_seller = Seller(
         email=seller.email,
-        hashed_password=seller.hashed_password,  # TODO: хешировать пароль
+        hashed_password=hash_password(seller.password),  # ← хешируем пароль
         first_name=seller.first_name,
         last_name=seller.last_name,
         middle_name=seller.middle_name,
@@ -60,7 +57,8 @@ def create_seller(
         inn=seller.inn,
         phone=seller.phone,
         status="PENDING",
-        is_active=True
+        is_active=True,
+        role="SELLER"  # ← по умолчанию обычный продавец
     )
     db.add(db_seller)
     db.commit()
@@ -80,43 +78,55 @@ def create_seller(
     )
 
 
-@router.get("/", response_model=List[SellerResponse])
+@router.get("/", response_model=PaginatedSellers)
 def get_sellers(
-    skip: int = 0,
-    limit: int = 100,
+    limit: int = 20,
+    offset: int = 0,
+    is_active: Optional[bool] = None,
     db: Session = Depends(get_db),
-    current_seller: SellerModel = Depends(get_current_seller)
+    current_seller: Seller = Depends(get_current_seller)
 ):
-    """
-    [ADMIN ONLY] Получить список всех продавцов.
-    """
-    sellers = db.query(Seller).offset(skip).limit(limit).all()
+    """[ADMIN ONLY] Получить список всех продавцов - GET /api/v1/admin/sellers/"""
+    check_admin(current_seller)
     
-    return [
-        SellerResponse(
-            id=s.id,
-            email=s.email,
-            first_name=s.first_name,
-            last_name=s.last_name,
-            middle_name=s.middle_name,
-            company_name=s.company_name,
-            inn=s.inn,
-            phone=s.phone,
-            created_at=s.created_at,
-            updated_at=s.updated_at
-        ) for s in sellers
-    ]
+    query = db.query(Seller)
+    
+    if is_active is not None:
+        query = query.filter(Seller.is_active == is_active)
+    
+    total = query.count()
+    sellers = query.order_by(Seller.created_at.desc()).offset(offset).limit(limit).all()
+    
+    return PaginatedSellers(
+        items=[
+            SellerResponse(
+                id=s.id,
+                email=s.email,
+                first_name=s.first_name,
+                last_name=s.last_name,
+                middle_name=s.middle_name,
+                company_name=s.company_name,
+                inn=s.inn,
+                phone=s.phone,
+                created_at=s.created_at,
+                updated_at=s.updated_at
+            ) for s in sellers
+        ],
+        total_count=total,
+        limit=limit,
+        offset=offset
+    )
 
 
 @router.get("/{seller_id}", response_model=SellerResponse)
 def get_seller(
     seller_id: UUID,
     db: Session = Depends(get_db),
-    current_seller: SellerModel = Depends(get_current_seller)
+    current_seller: Seller = Depends(get_current_seller)
 ):
-    """
-    [ADMIN ONLY] Получить продавца по ID.
-    """
+    """[ADMIN ONLY] Получить продавца по ID - GET /api/v1/admin/sellers/{seller_id}"""
+    check_admin(current_seller)
+    
     seller = db.query(Seller).filter(Seller.id == seller_id).first()
     if not seller:
         error_response("NOT_FOUND", "Seller not found", 404)
@@ -138,13 +148,13 @@ def get_seller(
 @router.patch("/{seller_id}", response_model=SellerResponse)
 def update_seller(
     seller_id: UUID,
-    seller_update: SellerUpdateRequest,
+    seller_update: SellerUpdate,
     db: Session = Depends(get_db),
-    current_seller: SellerModel = Depends(get_current_seller)
+    current_seller: Seller = Depends(get_current_seller)
 ):
-    """
-    [ADMIN ONLY] Обновить данные продавца.
-    """
+    """[ADMIN ONLY] Обновить данные продавца - PATCH /api/v1/admin/sellers/{seller_id}"""
+    check_admin(current_seller)
+    
     seller = db.query(Seller).filter(Seller.id == seller_id).first()
     if not seller:
         error_response("NOT_FOUND", "Seller not found", 404)
@@ -175,11 +185,11 @@ def update_seller(
 def delete_seller(
     seller_id: UUID,
     db: Session = Depends(get_db),
-    current_seller: SellerModel = Depends(get_current_seller)
+    current_seller: Seller = Depends(get_current_seller)
 ):
-    """
-    [ADMIN ONLY] Удалить продавца (soft-delete).
-    """
+    """[ADMIN ONLY] Удалить продавца (soft-delete) - DELETE /api/v1/admin/sellers/{seller_id}"""
+    check_admin(current_seller)
+    
     seller = db.query(Seller).filter(Seller.id == seller_id).first()
     if not seller:
         error_response("NOT_FOUND", "Seller not found", 404)

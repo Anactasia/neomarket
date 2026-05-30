@@ -3,7 +3,7 @@ from typing import Optional
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from fastapi import HTTPException, status
-from app.config import settings  # создадим ниже
+from app.config import settings
 
 # Настройки хеширования паролей
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -17,6 +17,10 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 def get_password_hash(password: str) -> str:
     """Хеширование пароля"""
     return pwd_context.hash(password)
+
+
+# Алиас для обратной совместимости
+hash_password = get_password_hash
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:

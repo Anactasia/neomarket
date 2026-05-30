@@ -34,3 +34,9 @@ class ModerationEventRequest(BaseModel):
     field_reports: Optional[List[FieldReport]] = None
     occurred_at: datetime
 
+
+class BlockingReason(BaseModel):
+    """Причина блокировки (по спецификации B2B)"""
+    id: UUID
+    title: str
+    comment: str = Field(..., description="Комментарий к причине блокировки")

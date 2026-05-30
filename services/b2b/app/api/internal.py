@@ -13,6 +13,7 @@ from app.models.sku import SKU
 from app.schemas.moderation import ModerationEventRequest, ModerationEventType
 from app.services.outbox import save_to_outbox
 from app.dependencies.service_keys import verify_moderation_service_key
+from app.config import settings
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -25,7 +26,7 @@ def error_response(code: str, message: str, status_code: int = 400):
     )
 
 
-# TODO: заменить на БД в production
+# TODO: заменить на таблицу в БД в production
 _moderation_idempotency_cache: dict[str, bool] = {}
 
 
@@ -68,6 +69,11 @@ def receive_moderation_event(
     
     # Обработка BLOCKED
     elif event.event_type == ModerationEventType.BLOCKED:
+        # Проверка, что товар не уже заблокирован
+        if product.status in ["BLOCKED", "HARD_BLOCKED"]:
+            logger.warning(f"Product {product.id} already blocked, skipping")
+            return None
+        
         if event.hard_block:
             product.status = "HARD_BLOCKED"
         else:
@@ -109,9 +115,9 @@ def receive_moderation_event(
                 db=db,
                 event_type=event_payload["event_type"],
                 target="b2c",
-                url="http://b2c:8000/api/v1/b2b/events",
+                url=settings.B2C_SERVICE_URL,  # ← из конфига
                 payload=event_payload,
-                headers={"X-Service-Key": os.getenv("B2B_TO_B2C_KEY", "b2b-to-b2c-key")}
+                headers={"X-Service-Key": settings.B2B_TO_B2C_KEY}
             )
             
             logger.info(f"Sent B2C event for product {product.id}: {event_payload['event_type']}")
@@ -120,36 +126,3 @@ def receive_moderation_event(
     _moderation_idempotency_cache[cache_key] = True
     
     return None
-
-
-
-# @router.post("/moderation-callback")
-# def moderation_callback(
-#     callback: dict,
-#     db: Session = Depends(get_db)
-# ):
-#     """
-#     Получить результат модерации от Moderation сервиса (legacy).
-#     """
-#     product_id = callback.get("product_id")
-#     decision = callback.get("decision")  # APPROVED or DECLINED
-#     comment = callback.get("comment")
-    
-#     product = db.query(Product).filter(Product.id == product_id).first()
-#     if not product:
-#         raise HTTPException(status_code=404, detail="Product not found")
-    
-#     if decision == "APPROVED":
-#         product.status = "MODERATED"
-#         product.published_at = datetime.utcnow()
-#     else:
-#         product.status = "BLOCKED"
-#         product.moderation_comment = comment
-    
-#     db.commit()
-    
-#     return {
-#         "success": True,
-#         "product_id": product_id,
-#         "new_status": product.status
-#     }

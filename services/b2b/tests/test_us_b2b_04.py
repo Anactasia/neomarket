@@ -10,7 +10,7 @@ from unittest.mock import patch, MagicMock
 
 # Устанавливаем переменные окружения ДО импорта приложения
 os.environ["B2B_TO_MOD_KEY"] = "test-mod-key"
-os.environ["B2C_TO_B2B_KEY"] = "test-b2c-key"
+os.environ["B2B_TO_B2C_KEY"] = "test-b2c-key"
 
 from app.main import app
 from app.database import get_db
@@ -389,7 +389,7 @@ class TestB2B04DeleteProduct:
         assert event is not None, "Event for this product not found"
         assert event.target == "b2c"
         import os
-        expected_key = os.getenv("B2C_TO_B2B_KEY", "b2b-to-b2c-key")
+        expected_key = os.getenv("B2B_TO_B2C_KEY", "b2b-to-b2c-key")
         assert expected_key in str(event.headers), f"Expected '{expected_key}' in headers, got {event.headers}"
         
         payload = event.payload

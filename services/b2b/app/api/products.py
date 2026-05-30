@@ -13,18 +13,15 @@ import os
 from app.database import get_db
 from app.models.category import Category
 from app.models.product import Product, ProductImage
-from app.models.sku import SKU, SKUImage
-from app.schemas.sku import SKU as SKUResponse, SKUImageResponse, SKUInProduct
 from app.models.sku import SKU, SKUImage, SKUCharacteristic
 from app.models.characteristic import Characteristic
 from app.models.seller import Seller
+from app.schemas.sku import SKUResponse, SKUPublicResponse, SKUImageResponse
 from app.schemas.product import (
     ProductCreate,
     ProductResponse,
     ProductUpdate,
     ProductStatus,
-    CharacteristicValue,
-    Product as ProductSchema,
     BlockingReason,
     FieldReport,
     ProductShortResponse,
@@ -32,23 +29,35 @@ from app.schemas.product import (
     ProductPublicShortResponse,
     ProductPublicResponse,
     ProductPublicPaginatedResponse,
-    SKUPublicResponse,
     BatchProductIdsRequest,
     ImageAttachRequest,
     ImageUpdateRequest
 )
-from app.schemas.common import CategoryRef, CharacteristicValueResponse, ProductImageResponse
+from app.schemas.common import CategoryRef, CharacteristicResponse, ProductImageResponse
 from app.dependencies.auth import get_current_seller, get_current_seller_optional
 from app.dependencies.service_keys import verify_moderation_service_key
 
 router = APIRouter()
 
 
-def error_response(code: str, message: str, status_code: int = 422):
+def error_response(code: str, message: str, status_code: int = 400):
     raise HTTPException(
         status_code=status_code,
         detail={"code": code, "message": message}
     )
+
+
+def _extract_characteristic_value(char) -> str:
+    """Извлекает значение характеристики в строковом виде"""
+    if hasattr(char, 'value_string') and char.value_string:
+        return char.value_string
+    elif hasattr(char, 'value_int') and char.value_int is not None:
+        return str(char.value_int)
+    elif hasattr(char, 'value_float') and char.value_float is not None:
+        return str(char.value_float)
+    elif hasattr(char, 'value_bool') and char.value_bool is not None:
+        return str(char.value_bool).lower()
+    return ""
 
 
 def product_to_full_response(product: Product, db: Session) -> ProductResponse:
@@ -56,19 +65,33 @@ def product_to_full_response(product: Product, db: Session) -> ProductResponse:
     
     skus = []
     for sku in product.skus:
-        skus.append(SKUInProduct(
+        skus.append(SKUResponse(  # ← используем SKUResponse
             id=sku.id,
+            product_id=sku.product_id,
             name=sku.name,
             price=sku.price,
+            cost_price=sku.cost_price,
             discount=sku.discount or 0,
-            images=[img.url for img in sku.images],
+            stock_quantity=sku.stock_quantity,
             active_quantity=sku.active_quantity,
+            reserved_quantity=sku.reserved_quantity,
+            article=sku.article,
+            images=[
+                SKUImageResponse(
+                    id=img.id,
+                    url=img.url,
+                    ordering=img.sort_order
+                ) for img in sku.images
+            ],
             characteristics=[
-                CharacteristicValue(
-                    name=char.characteristic.name if char.characteristic else "Characteristic",
-                    value=char.value_string or ""
-                ) for char in sku.characteristics
-            ]
+                CharacteristicResponse(
+                    id=char.id,
+                    name=char.characteristic.name if char.characteristic else "Unknown",
+                    value=_extract_characteristic_value(char)
+                ) for char in sku.characteristics if char.characteristic
+            ],
+            created_at=sku.created_at,
+            updated_at=sku.updated_at or sku.created_at
         ))
     
     return ProductResponse(
@@ -80,8 +103,8 @@ def product_to_full_response(product: Product, db: Session) -> ProductResponse:
         description=product.description or "",
         status=ProductStatus(product.status),
         deleted=product.deleted,
-        blocking_reason_id=product.blocking_reason_id,
-        moderator_comment=product.moderation_comment,
+        blocking_reason_id=product.blocking_reason_id,      # ← добавить/проверить
+        moderator_comment=product.moderation_comment,       # ← добавить/проверить
         images=[
             ProductImageResponse(
                 id=img.id,
@@ -90,10 +113,10 @@ def product_to_full_response(product: Product, db: Session) -> ProductResponse:
             ) for img in product.images
         ],
         characteristics=[
-            CharacteristicValueResponse(
-                id=uuid.uuid4(),
-                name=char["name"],
-                value=char["value"]
+            CharacteristicResponse(
+                id=char.get("id", uuid.uuid4()),
+                name=char.get("name", "Unknown"),
+                value=char.get("value", "")
             ) for char in (product.characteristics_json or [])
         ],
         skus=skus,
@@ -103,26 +126,8 @@ def product_to_full_response(product: Product, db: Session) -> ProductResponse:
 
 
 def product_to_public_response(product: Product, db: Session) -> ProductPublicResponse:
-    """Преобразует Product в публичный ProductPublicResponse"""
+    """Преобразует Product в публичный ProductPublicResponse (без cost_price/reserved_quantity)"""
     
-    # Формируем blocking_reason и field_reports
-    blocking_reason = None
-    if hasattr(product, 'blocked') and product.blocked and product.blocking_reason_id:
-        blocking_reason = BlockingReason(
-            id=product.blocking_reason_id,
-            title="Товар заблокирован модерацией",
-            comment=product.moderation_comment
-        )
-    
-    field_reports = []
-    if hasattr(product, 'field_reports_json') and product.field_reports_json:
-        for fr in product.field_reports_json:
-            field_reports.append(FieldReport(
-                field_name=fr.get("field_name", ""),
-                sku_id=UUID(fr["sku_id"]) if fr.get("sku_id") else None,
-                comment=fr.get("comment", "")
-            ))
-
     # Формируем SKU без чувствительных полей
     skus = []
     for sku in product.skus:
@@ -143,11 +148,11 @@ def product_to_public_response(product: Product, db: Session) -> ProductPublicRe
                 ) for img in sku.images
             ],
             characteristics=[
-                CharacteristicValueResponse(
+                CharacteristicResponse(
                     id=char.id,
-                    name=char.characteristic.name if char.characteristic else "Characteristic",
-                    value=char.value_string or ""
-                ) for char in sku.characteristics
+                    name=char.characteristic.name if char.characteristic else "Unknown",
+                    value=_extract_characteristic_value(char)
+                ) for char in sku.characteristics if char.characteristic
             ]
         ))
     
@@ -167,10 +172,10 @@ def product_to_public_response(product: Product, db: Session) -> ProductPublicRe
             ) for img in product.images
         ],
         characteristics=[
-            CharacteristicValueResponse(
+            CharacteristicResponse(
                 id=uuid.uuid4(),
-                name=char["name"],
-                value=char["value"]
+                name=char.get("name", "Unknown"),
+                value=char.get("value", "")
             ) for char in (product.characteristics_json or [])
         ],
         skus=skus,
@@ -190,9 +195,7 @@ def send_event_to_moderation_sync(
     json_after: Optional[dict] = None,
     category_id: Optional[UUID] = None
 ):
-    """
-    Сохраняет событие в outbox вместо прямой отправки.
-    """
+    """Сохраняет событие в outbox вместо прямой отправки."""
     from datetime import datetime, timezone
     
     payload: dict = {
@@ -238,9 +241,7 @@ def send_event_to_b2c_sync(
     b2c_url: str = "http://b2c:8000",
     event_type: str = "PRODUCT_DELETED"
 ):
-    """
-    Сохраняет событие в outbox вместо прямой отправки.
-    """
+    """Сохраняет событие в outbox вместо прямой отправки."""
     from datetime import datetime, timezone
     
     payload = {
@@ -265,20 +266,21 @@ def send_event_to_b2c_sync(
     )
     
 
+# ========== ОСНОВНЫЕ ЭНДПОИНТЫ ==========
+
 @router.post("/", response_model=ProductResponse, status_code=status.HTTP_201_CREATED)
 def create_product(
     product: ProductCreate,
     db: Session = Depends(get_db),
     current_seller: Seller = Depends(get_current_seller)
 ):
-    """Создание карточки товара — B2B-1"""
+    """Создание карточки товара - POST /api/v1/products/"""
     
     # 1. Проверка категории
     category = db.query(Category).filter(Category.id == product.category_id).first()
     if not category:
         error_response("INVALID_REQUEST", "Category not found", 400)
     
-    # Проверка, что категория активна
     if not category.is_active:
         error_response("INVALID_REQUEST", "Category is not active", 400)
     
@@ -319,36 +321,7 @@ def create_product(
     db.commit()
     db.refresh(db_product)
     
-    # 6. Формирование ответа
-    return ProductResponse(
-        id=db_product.id,
-        seller_id=current_seller.id,
-        category_id=product.category_id,
-        title=db_product.title,
-        slug=db_product.slug or "",
-        description=db_product.description,
-        status=ProductStatus(db_product.status),
-        deleted=db_product.deleted,
-        blocking_reason_id=db_product.blocking_reason_id,
-        moderator_comment=db_product.moderation_comment,
-        images=[
-            ProductImageResponse(
-                id=img.id,
-                url=img.url,
-                ordering=img.sort_order
-            ) for img in db_product.images
-        ],
-        characteristics=[
-            CharacteristicValueResponse(
-                id=uuid.uuid4(),
-                name=char["name"],
-                value=char["value"]
-            ) for char in (db_product.characteristics_json or [])
-        ],
-        skus=[],
-        created_at=db_product.created_at,
-        updated_at=db_product.updated_at
-    )
+    return product_to_full_response(db_product, db)
     
 
 @router.get("/", response_model=ProductPaginatedResponse)
@@ -362,7 +335,7 @@ def get_products(
     current_seller: Seller = Depends(get_current_seller)
 ):
     """
-    Получить список товаров текущего продавца с пагинацией.
+    Получить список товаров текущего продавца с пагинацией - GET /api/v1/products/
     
     IDOR защита: seller_id всегда берётся из JWT токена.
     """
@@ -415,7 +388,7 @@ def get_product(
     current_seller: Optional[Seller] = Depends(get_current_seller_optional)
 ):
     """
-    Получить карточку товара.
+    Получить карточку товара - GET /api/v1/products/{product_id}
     
     Режимы вызова:
     1. Seller cabinet (Bearer JWT) — полные данные с cost_price/reserved_quantity
@@ -429,8 +402,7 @@ def get_product(
         product = db.query(Product).options(
             selectinload(Product.skus).selectinload(SKU.images),
             selectinload(Product.skus).selectinload(SKU.characteristics).selectinload(SKUCharacteristic.characteristic),
-            selectinload(Product.images),
-            selectinload(Product.characteristics)
+            selectinload(Product.images)
         ).filter(
             Product.id == product_id,
             Product.deleted == False
@@ -454,13 +426,15 @@ def get_product(
         return product_to_full_response(product, db)
         
 
-@router.patch("/{product_id}", response_model=ProductResponse, status_code=status.HTTP_200_OK)
+@router.patch("/{product_id}", response_model=ProductResponse)
 def update_product(
     product_id: UUID, 
     product_update: ProductUpdate,
     db: Session = Depends(get_db),
     current_seller: Seller = Depends(get_current_seller)
 ):
+    """Обновление товара - PATCH /api/v1/products/{product_id}"""
+    
     # 1. Проверяем существование товара
     product = db.query(Product).filter(Product.id == product_id).first()
     
@@ -544,11 +518,9 @@ def update_product(
             category_id=product.category_id
         )
     
-    # 8. Commit после сохранения outbox
     db.commit()
     db.refresh(product)
     
-    # 9. Возвращаем обновленный товар
     return product_to_full_response(product, db)
     
 
@@ -558,21 +530,23 @@ def list_product_skus(
     db: Session = Depends(get_db),
     current_seller: Seller = Depends(get_current_seller)
 ):
-    """Все SKU товара (seller view)"""
-    product = db.query(Product).options(
-        selectinload(Product.skus).selectinload(SKU.images),
-        selectinload(Product.skus).selectinload(SKU.characteristics).selectinload(SKUCharacteristic.characteristic)
-    ).filter(Product.id == product_id).first()
+    """Все SKU товара (seller view) - GET /api/v1/products/{product_id}/skus"""
+    product = db.query(Product).filter(Product.id == product_id).first()
     
     if not product:
         error_response("NOT_FOUND", "Product not found", 404)
     
     if product.seller_id != current_seller.id:
-        error_response("NOT_OWNER", "Product does not belong to you", 403)
+        error_response("FORBIDDEN", "Product does not belong to you", 403)
     
-    skus = []
-    for sku in product.skus: 
-        skus.append(SKUResponse(
+    skus = db.query(SKU).options(
+        selectinload(SKU.images),
+        selectinload(SKU.characteristics).selectinload(SKUCharacteristic.characteristic)
+    ).filter(SKU.product_id == product_id).all()
+    
+    result = []
+    for sku in skus:
+        result.append(SKUResponse(
             id=sku.id,
             product_id=sku.product_id,
             name=sku.name,
@@ -591,18 +565,20 @@ def list_product_skus(
                 ) for img in sku.images
             ],
             characteristics=[
-                CharacteristicValueResponse(
+                CharacteristicResponse(
                     id=char.id,
-                    name=char.characteristic.name if char.characteristic else "Characteristic",
-                    value=char.value_string or ""
-                ) for char in sku.characteristics
+                    name=char.characteristic.name if char.characteristic else "Unknown",
+                    value=_extract_characteristic_value(char)
+                ) for char in sku.characteristics if char.characteristic
             ],
             created_at=sku.created_at,
-            updated_at=sku.updated_at
+            updated_at=sku.updated_at or sku.created_at
         ))
     
-    return skus
+    return result
 
+
+# ========== ИЗОБРАЖЕНИЯ ТОВАРОВ ==========
 
 @router.post("/{product_id}/images", response_model=ProductImageResponse, status_code=status.HTTP_201_CREATED)
 def add_product_image(
@@ -611,13 +587,13 @@ def add_product_image(
     db: Session = Depends(get_db),
     current_seller: Seller = Depends(get_current_seller)
 ):
-    """Прикрепить изображение к товару"""
+    """Прикрепить изображение к товару - POST /api/v1/products/{product_id}/images"""
     product = db.query(Product).filter(Product.id == product_id).first()
     if not product:
         error_response("NOT_FOUND", "Product not found", 404)
     
     if product.seller_id != current_seller.id:
-        error_response("NOT_OWNER", "Product does not belong to you", 403)
+        error_response("FORBIDDEN", "Product does not belong to you", 403)
     
     db_image = ProductImage(
         product_id=product_id,
@@ -642,14 +618,14 @@ def update_product_image(
     db: Session = Depends(get_db),
     current_seller: Seller = Depends(get_current_seller)
 ):
-    """Обновить изображение товара (ordering)"""
+    """Обновить изображение товара - PATCH /api/v1/products/images/{image_id}"""
     image = db.query(ProductImage).filter(ProductImage.id == image_id).first()
     if not image:
         error_response("NOT_FOUND", "Image not found", 404)
     
     product = db.query(Product).filter(Product.id == image.product_id).first()
     if product.seller_id != current_seller.id:
-        error_response("NOT_OWNER", "Product does not belong to you", 403)
+        error_response("FORBIDDEN", "Product does not belong to you", 403)
     
     if image_data.url is not None:
         image.url = image_data.url
@@ -672,14 +648,14 @@ def delete_product_image(
     db: Session = Depends(get_db),
     current_seller: Seller = Depends(get_current_seller)
 ):
-    """Удалить изображение товара"""
+    """Удалить изображение товара - DELETE /api/v1/products/images/{image_id}"""
     image = db.query(ProductImage).filter(ProductImage.id == image_id).first()
     if not image:
         error_response("NOT_FOUND", "Image not found", 404)
     
     product = db.query(Product).filter(Product.id == image.product_id).first()
     if product.seller_id != current_seller.id:
-        error_response("NOT_OWNER", "Product does not belong to you", 403)
+        error_response("FORBIDDEN", "Product does not belong to you", 403)
     
     db.delete(image)
     db.commit()
@@ -693,9 +669,8 @@ def delete_product(
     current_seller: Seller = Depends(get_current_seller)
 ):
     """
-    Удалить товар (мягкое удаление).
+    Удалить товар (мягкое удаление) - DELETE /api/v1/products/{product_id}
     
-    Соответствует US-B2B-04:
     - Мягкое удаление: deleted = True
     - Проверка ownership (IDOR защита)
     - Проверка HARD_BLOCKED → 403
@@ -708,7 +683,7 @@ def delete_product(
         error_response("NOT_FOUND", "Product not found", 404)
     
     if product.seller_id != current_seller.id:
-        error_response("NOT_OWNER", "Product does not belong to the authenticated seller", 403)
+       error_response("NOT_OWNER", "Product does not belong to the authenticated seller", 403)
     
     if product.status == ProductStatus.HARD_BLOCKED.value:
         error_response("FORBIDDEN", "Cannot delete hard-blocked product", 403)

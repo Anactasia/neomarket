@@ -11,7 +11,8 @@ from app.dependencies.auth import get_current_seller
 from app.models.seller import Seller
 from app.models.product import Product
 from app.models.sku import SKU
-from app.schemas.common import ImageUploadResponse
+from app.models.image import Image  # ← нужно создать
+from app.schemas.common import ImageUploadResponse, ImageEntityType
 
 router = APIRouter()
 
@@ -42,41 +43,16 @@ def verify_magic_bytes(content: bytes, mime_type: str) -> bool:
     return False
 
 
-def check_entity_ownership(
-    entity_id: UUID,
-    entity_type: str,
-    current_seller_id: UUID,
-    db: Session
-):
-    """Проверяет, что текущий продавец владеет entity"""
-    if entity_type == "PRODUCT":
-        product = db.query(Product).filter(Product.id == entity_id).first()
-        if not product or product.seller_id != current_seller_id:
-            error_response("FORBIDDEN", "You don't own this product", 403)
-    elif entity_type == "SKU":
-        sku = db.query(SKU).join(Product).filter(SKU.id == entity_id).first()
-        if not sku or sku.product.seller_id != current_seller_id:
-            error_response("FORBIDDEN", "You don't own this SKU", 403)
-    else:
-        error_response("INVALID_REQUEST", "entity_type must be PRODUCT or SKU", 400)
-
-
 @router.post("/", response_model=ImageUploadResponse, status_code=status.HTTP_201_CREATED)
 def upload_image(
     file: UploadFile = File(...),
-    entity_type: str = Form(...),
+    entity_type: ImageEntityType = Form(...),  # ← enum
     entity_id: Optional[UUID] = Form(None),
-    ordering: int = Form(0),
+    ordering: int = Form(0, ge=0),  # ← валидация
     db: Session = Depends(get_db),
     current_seller: Seller = Depends(get_current_seller)
 ):
     """POST /api/v1/images - загрузка изображения"""
-    
-    if entity_type not in ("PRODUCT", "SKU"):
-        error_response("INVALID_REQUEST", "entity_type must be PRODUCT or SKU", 400)
-    
-    if entity_id:
-        check_entity_ownership(entity_id, entity_type, current_seller.id, db)
     
     content = file.file.read()
     file_size = len(content)
@@ -91,6 +67,21 @@ def upload_image(
     if not verify_magic_bytes(content, mime_type):
         error_response("UNSUPPORTED_MEDIA_TYPE", "File content does not match declared type", 415)
     
+    # Проверка существования entity и прав
+    if entity_id:
+        if entity_type == ImageEntityType.PRODUCT:
+            product = db.query(Product).filter(Product.id == entity_id).first()
+            if not product:
+                error_response("NOT_FOUND", "Product not found", 404)
+            if product.seller_id != current_seller.id:
+                error_response("FORBIDDEN", "You don't own this product", 403)
+        elif entity_type == ImageEntityType.SKU:
+            sku = db.query(SKU).join(Product).filter(SKU.id == entity_id).first()
+            if not sku:
+                error_response("NOT_FOUND", "SKU not found", 404)
+            if sku.product.seller_id != current_seller.id:
+                error_response("FORBIDDEN", "You don't own this SKU", 403)
+    
     file_ext = {
         "image/jpeg": ".jpg",
         "image/png": ".png",
@@ -101,11 +92,25 @@ def upload_image(
     filename = f"{image_id}{file_ext}"
     file_path = UPLOAD_DIR / filename
     
-    with open(file_path, "wb") as f:
-        f.write(content)
+    try:
+        with open(file_path, "wb") as f:
+            f.write(content)
+    except OSError as e:
+        error_response("INTERNAL_ERROR", f"Failed to save file: {e}", 500)
     
     base_url = os.getenv("BASE_URL", "http://localhost:8000")
     url = f"{base_url}/uploads/{filename}"
+    
+    # Сохранение в БД
+    db_image = Image(
+        id=image_id,
+        url=url,
+        ordering=ordering,
+        entity_type=entity_type.value,
+        entity_id=entity_id if entity_id else None
+    )
+    db.add(db_image)
+    db.commit()
     
     return ImageUploadResponse(
         id=image_id,

@@ -249,8 +249,8 @@ class TestB2B10Fulfill:
         )
         assert response.status_code == 401
 
-    def test_sku_not_found_returns_400(self, client, service_key):
-        """несуществующий SKU → 400"""
+    def test_sku_not_found_returns_404(self, client, service_key):
+        """несуществующий SKU → 404"""
         response = client.post(
             "/api/v1/inventory/fulfill",
             json={
@@ -259,6 +259,6 @@ class TestB2B10Fulfill:
             },
             headers={"X-Service-Key": service_key}
         )
-        assert response.status_code == 400
+        assert response.status_code == 404
         error_data = response.json()
-        assert error_data["code"] == "INVALID_REQUEST"
+        assert error_data["code"] == "NOT_FOUND"

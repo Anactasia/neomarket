@@ -4,20 +4,20 @@ from typing import List, Optional
 from uuid import UUID
 import uuid as uuid_module
 import os
-from app.services.outbox import save_to_outbox
 
 from app.database import get_db
 from app.models.sku import SKU, SKUCharacteristic, SKUImage
 from app.models.product import Product
+from app.services.outbox import save_to_outbox
 
 from app.schemas.sku import (
     SKUCreate,
-    SKU as SKUSchema,
+    SKUResponse,
     SKUUpdate,
     SKUImageResponse,
     SKUImageCreate
 )
-from app.schemas.common import CharacteristicValueResponse, CharacteristicValue
+from app.schemas.common import CharacteristicResponse
 from app.schemas.product import ProductStatus, ImageAttachRequest, ImageUpdateRequest
 from app.dependencies.auth import get_current_seller
 from app.models.seller import Seller
@@ -25,14 +25,14 @@ from app.models.seller import Seller
 router = APIRouter()
 
 
-def error_response(code: str, message: str, status_code: int = 422):
+def error_response(code: str, message: str, status_code: int = 400):
     raise HTTPException(
         status_code=status_code,
         detail={"code": code, "message": message}
     )
 
 
-def send_event_to_moderation_sync(
+def send_event_to_moderation(
     product_id: UUID,
     seller_id: UUID,
     idempotency_key: str,
@@ -43,7 +43,7 @@ def send_event_to_moderation_sync(
     json_after: Optional[dict] = None,
     category_id: Optional[UUID] = None
 ):
-    """Сохраняет событие в outbox вместо прямой отправки."""
+    """Сохраняет событие в outbox."""
     from datetime import datetime, timezone
     
     payload: dict = {
@@ -55,7 +55,7 @@ def send_event_to_moderation_sync(
     
     if event_type == "PRODUCT_CREATED":
         payload["json_after"] = json_after or {}
-    elif event_type == "PRODUCT_EDITED" or event_type == "SKU_EDITED":
+    elif event_type in ("PRODUCT_EDITED", "SKU_EDITED"):
         payload["json_before"] = json_before or {}
         payload["json_after"] = json_after or {}
     
@@ -76,9 +76,22 @@ def send_event_to_moderation_sync(
     )
 
 
-def _sku_to_schema(sku: SKU) -> SKUSchema:
-    """Преобразовать модель SKU в схему ответа"""
-    return SKUSchema(
+def _extract_characteristic_value(char: SKUCharacteristic) -> str:
+    """Извлекает значение характеристики в строковом виде"""
+    if char.value_string:
+        return char.value_string
+    elif char.value_int is not None:
+        return str(char.value_int)
+    elif char.value_float is not None:
+        return str(char.value_float)
+    elif char.value_bool is not None:
+        return str(char.value_bool).lower()
+    return ""
+
+
+def _sku_to_response(sku: SKU) -> SKUResponse:
+    """Преобразовать модель SKU в схему ответа (по спецификации B2B)"""
+    return SKUResponse(
         id=sku.id,
         product_id=sku.product_id,
         name=sku.name,
@@ -97,26 +110,26 @@ def _sku_to_schema(sku: SKU) -> SKUSchema:
             ) for img in sku.images
         ],
         characteristics=[
-            CharacteristicValueResponse(
+            CharacteristicResponse(
                 id=char.id,
-                name=char.characteristic.name if char.characteristic else "Characteristic",
-                value=char.value_string or ""
-            ) for char in sku.characteristics
+                name=char.characteristic.name if char.characteristic else "Unknown",
+                value=_extract_characteristic_value(char)
+            ) for char in sku.characteristics if char.characteristic
         ],
         created_at=sku.created_at,
         updated_at=sku.updated_at or sku.created_at
     )
 
 
-# ========== ОСНОВНЫЕ ЭНДПОИНТЫ (по спецификации) ==========
+# ========== SKU ENDPOINTS ==========
 
-@router.get("/{sku_id}", response_model=SKUSchema)
+@router.get("/{sku_id}", response_model=SKUResponse)
 def get_sku(
     sku_id: UUID,
     db: Session = Depends(get_db),
     current_seller: Seller = Depends(get_current_seller)
 ):
-    """Получить SKU (seller view)"""
+    """Получить SKU (seller view) - GET /api/v1/skus/{sku_id}"""
     sku = db.query(SKU).options(
         selectinload(SKU.images),
         selectinload(SKU.characteristics).selectinload(SKUCharacteristic.characteristic)
@@ -127,18 +140,18 @@ def get_sku(
     
     product = db.query(Product).filter(Product.id == sku.product_id).first()
     if product.seller_id != current_seller.id:
-        error_response("NOT_OWNER", "SKU does not belong to you", 403)
+        error_response("FORBIDDEN", "SKU does not belong to you", 403)
     
-    return _sku_to_schema(sku)
+    return _sku_to_response(sku)
 
 
-@router.post("/", response_model=SKUSchema, status_code=status.HTTP_201_CREATED)
+@router.post("/", response_model=SKUResponse, status_code=status.HTTP_201_CREATED)
 def create_sku(
     sku: SKUCreate,
     db: Session = Depends(get_db),
     current_seller: Seller = Depends(get_current_seller)
 ):
-    """Создать новый SKU (вариант товара)."""
+    """Создать новый SKU - POST /api/v1/skus/"""
     # 1. Проверяем существование товара
     product = db.query(Product).filter(Product.id == sku.product_id).first()
     if not product:
@@ -180,8 +193,8 @@ def create_sku(
     for char in sku.characteristics:
         db_char = SKUCharacteristic(
             sku_id=db_sku.id,
-            characteristic_id=None,  # будет заполняться при создании характеристики
-            value_string=str(char.value) if isinstance(char.value, (str, int, float, bool)) else char.value,
+            characteristic_id=None,
+            value_string=str(char.value) if isinstance(char.value, (str, int, float, bool)) else str(char.value),
             value_int=int(char.value) if isinstance(char.value, int) else None,
             value_float=float(char.value) if isinstance(char.value, float) else None,
             value_bool=bool(char.value) if isinstance(char.value, bool) else None
@@ -211,7 +224,7 @@ def create_sku(
             "title": product.title,
             "status": product.status.value if hasattr(product.status, 'value') else str(product.status)
         }
-        send_event_to_moderation_sync(
+        send_event_to_moderation(
             product_id=sku.product_id,
             seller_id=product.seller_id,
             idempotency_key=idempotency_key,
@@ -237,7 +250,7 @@ def create_sku(
             "title": product.title,
             "status": product.status.value if hasattr(product.status, 'value') else str(product.status)
         }
-        send_event_to_moderation_sync(
+        send_event_to_moderation(
             product_id=sku.product_id,
             seller_id=product.seller_id,
             idempotency_key=idempotency_key,
@@ -249,19 +262,19 @@ def create_sku(
         )
     
     db.refresh(db_sku)
-    return _sku_to_schema(db_sku)
+    return _sku_to_response(db_sku)
 
 
-@router.patch("/{sku_id}", response_model=SKUSchema, status_code=status.HTTP_200_OK)
+@router.patch("/{sku_id}", response_model=SKUResponse)
 def update_sku(
     sku_id: UUID,
     sku_update: SKUUpdate,
     db: Session = Depends(get_db),
     current_seller: Seller = Depends(get_current_seller)
 ):
-    """Обновить SKU (вариант товара)."""
+    """Обновить SKU - PATCH /api/v1/skus/{sku_id}"""
     
-    # 1. Проверяем существование SKU с загрузкой связанных данных
+    # 1. Проверяем существование SKU
     db_sku = db.query(SKU).options(
         selectinload(SKU.images),
         selectinload(SKU.characteristics).selectinload(SKUCharacteristic.characteristic)
@@ -295,7 +308,7 @@ def update_sku(
                 db_char = SKUCharacteristic(
                     sku_id=db_sku.id,
                     characteristic_id=None,
-                    value_string=str(char.value) if isinstance(char.value, (str, int, float, bool)) else char.value,
+                    value_string=str(char.value) if isinstance(char.value, (str, int, float, bool)) else str(char.value),
                     value_int=int(char.value) if isinstance(char.value, int) else None,
                     value_float=float(char.value) if isinstance(char.value, float) else None,
                     value_bool=bool(char.value) if isinstance(char.value, bool) else None
@@ -341,7 +354,7 @@ def update_sku(
             "status": product.status.value if hasattr(product.status, 'value') else str(product.status)
         }
         
-        send_event_to_moderation_sync(
+        send_event_to_moderation(
             product_id=product.id,
             seller_id=product.seller_id,
             idempotency_key=idempotency_key,
@@ -353,7 +366,7 @@ def update_sku(
         )
     
     db.refresh(db_sku)
-    return _sku_to_schema(db_sku)
+    return _sku_to_response(db_sku)
 
 
 @router.delete("/{sku_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -362,7 +375,7 @@ def delete_sku(
     db: Session = Depends(get_db),
     current_seller: Seller = Depends(get_current_seller)
 ):
-    """Удалить SKU. Запрещено, если reserved_quantity > 0."""
+    """Удалить SKU - DELETE /api/v1/skus/{sku_id}"""
     sku = db.query(SKU).filter(SKU.id == sku_id).first()
     if not sku:
         error_response("NOT_FOUND", "SKU not found", 404)
@@ -389,6 +402,8 @@ def delete_sku(
     return None
 
 
+# ========== SKU IMAGES ENDPOINTS ==========
+
 @router.post("/{sku_id}/images", response_model=SKUImageResponse, status_code=status.HTTP_201_CREATED)
 def add_sku_image(
     sku_id: UUID,
@@ -396,14 +411,14 @@ def add_sku_image(
     db: Session = Depends(get_db),
     current_seller: Seller = Depends(get_current_seller)
 ):
-    """Прикрепить изображение к SKU"""
+    """Прикрепить изображение к SKU - POST /api/v1/skus/{sku_id}/images"""
     sku = db.query(SKU).filter(SKU.id == sku_id).first()
     if not sku:
         error_response("NOT_FOUND", "SKU not found", 404)
     
     product = db.query(Product).filter(Product.id == sku.product_id).first()
     if product.seller_id != current_seller.id:
-        error_response("NOT_OWNER", "SKU does not belong to you", 403)
+        error_response("FORBIDDEN", "SKU does not belong to you", 403)
     
     db_image = SKUImage(
         sku_id=sku_id,
@@ -428,7 +443,7 @@ def update_sku_image(
     db: Session = Depends(get_db),
     current_seller: Seller = Depends(get_current_seller)
 ):
-    """Обновить изображение SKU"""
+    """Обновить изображение SKU - PATCH /api/v1/skus/images/{image_id}"""
     db_image = db.query(SKUImage).filter(SKUImage.id == image_id).first()
     if not db_image:
         error_response("NOT_FOUND", "Image not found", 404)
@@ -436,7 +451,7 @@ def update_sku_image(
     sku = db.query(SKU).filter(SKU.id == db_image.sku_id).first()
     product = db.query(Product).filter(Product.id == sku.product_id).first()
     if product.seller_id != current_seller.id:
-        error_response("NOT_OWNER", "Image does not belong to you", 403)
+        error_response("FORBIDDEN", "Image does not belong to you", 403)
     
     if image_data.url is not None:
         db_image.url = image_data.url
@@ -459,7 +474,7 @@ def delete_sku_image(
     db: Session = Depends(get_db),
     current_seller: Seller = Depends(get_current_seller)
 ):
-    """Удалить изображение SKU"""
+    """Удалить изображение SKU - DELETE /api/v1/skus/images/{image_id}"""
     db_image = db.query(SKUImage).filter(SKUImage.id == image_id).first()
     if not db_image:
         error_response("NOT_FOUND", "Image not found", 404)
@@ -467,8 +482,32 @@ def delete_sku_image(
     sku = db.query(SKU).filter(SKU.id == db_image.sku_id).first()
     product = db.query(Product).filter(Product.id == sku.product_id).first()
     if product.seller_id != current_seller.id:
-        error_response("NOT_OWNER", "Image does not belong to you", 403)
+        error_response("FORBIDDEN", "Image does not belong to you", 403)
     
     db.delete(db_image)
     db.commit()
     return None
+
+
+# ========== ДОПОЛНИТЕЛЬНЫЙ ЭНДПОИНТ (по спецификации B2B) ==========
+
+@router.get("/products/{product_id}/skus", response_model=List[SKUResponse])
+def get_product_skus(
+    product_id: UUID,
+    db: Session = Depends(get_db),
+    current_seller: Seller = Depends(get_current_seller)
+):
+    """Получить все SKU товара (seller view) - GET /api/v1/products/{product_id}/skus"""
+    product = db.query(Product).filter(Product.id == product_id).first()
+    if not product:
+        error_response("NOT_FOUND", "Product not found", 404)
+    
+    if product.seller_id != current_seller.id:
+        error_response("FORBIDDEN", "Product does not belong to you", 403)
+    
+    skus = db.query(SKU).options(
+        selectinload(SKU.images),
+        selectinload(SKU.characteristics).selectinload(SKUCharacteristic.characteristic)
+    ).filter(SKU.product_id == product_id).all()
+    
+    return [_sku_to_response(sku) for sku in skus]
