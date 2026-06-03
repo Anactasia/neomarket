@@ -154,28 +154,49 @@ def get_public_products(
         for key, value in request.query_params.items():
             if key.startswith("filters[") and key.endswith("]"):
                 char_name = key[8:-1]  # 'filters[color]' → 'color'
-                # Поддерживаем значения через запятую: red,blue
-                values_list = [v.strip() for v in value.split(",")]
+                if isinstance(value, list):
+                    values_list = value
+                else:
+                    values_list = [v.strip() for v in str(value).split(",")]
                 if char_name not in characteristic_filters:
                     characteristic_filters[char_name] = []
                 characteristic_filters[char_name].extend(values_list)
-    
-    # Применяем фильтры по характеристикам (через jsonb_array_elements)
+
+    # Применяем фильтры по характеристикам (безопасно, с bind-параметрами)
+    from sqlalchemy import text
+    from sqlalchemy import inspect
+
+    dialect = inspect(db.bind).dialect.name
+
     for char_name, values in characteristic_filters.items():
         if values:
-            # Используем EXISTS с jsonb_array_elements для поиска
-            from sqlalchemy import text
             conditions = []
-            for val in values:
-                # Безопасный поиск в JSON массиве
-                condition = text(
-                    f"EXISTS (SELECT 1 FROM json_array_elements(products.characteristics_json) AS elem "
-                    f"WHERE elem->>'name' = '{char_name}' AND elem->>'value' = '{val}')"
-                )
+            for idx, val in enumerate(values):
+                # Создаем уникальные имена для bind-параметров
+                param_name = f"char_name_{idx}"
+                param_value = f"char_value_{idx}"
+                
+                if dialect == 'postgresql':
+                    condition = text(
+                        f"EXISTS (SELECT 1 FROM json_array_elements(products.characteristics_json) AS elem "
+                        f"WHERE elem->>'name' = :{param_name} AND elem->>'value' = :{param_value})"
+                    ).bindparams(**{param_name: char_name, param_value: val})
+                elif dialect == 'sqlite':
+                    condition = text(
+                        f"EXISTS (SELECT 1 FROM json_each(products.characteristics_json) "
+                        f"WHERE json_extract(json_each.value, '$.name') = :{param_name} "
+                        f"AND json_extract(json_each.value, '$.value') = :{param_value})"
+                    ).bindparams(**{param_name: char_name, param_value: val})
+                else:
+                    condition = text(
+                        f"EXISTS (SELECT 1 FROM json_array_elements(products.characteristics_json) AS elem "
+                        f"WHERE elem->>'name' = :{param_name} AND elem->>'value' = :{param_value})"
+                    ).bindparams(**{param_name: char_name, param_value: val})
                 conditions.append(condition)
             if conditions:
                 query = query.filter(or_(*conditions))
     
+
     if category_id:
         query = query.filter(Product.category_id == category_id)
     
@@ -240,7 +261,7 @@ def get_public_products(
             min_price=min_price_val,
             cover_image=cover_image
         ))
-    
+   
     return ProductPublicPaginatedResponse(
         items=result_items,
         total_count=total_count,

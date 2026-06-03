@@ -387,23 +387,120 @@ def delete_sku(
     if not product:
         error_response("NOT_FOUND", "Product not found", 404)
     
+    # 1. Проверка HARD_BLOCKED
     if product.status == ProductStatus.HARD_BLOCKED:
         error_response("FORBIDDEN", "Cannot delete SKU of hard-blocked product", 403)
     
+    # 2. Проверка ownership
     if product.seller_id != current_seller.id:
         error_response("NOT_OWNER", "SKU does not belong to you", 403)
     
+    # 3. Проверка активных резервов
     if sku.reserved_quantity > 0:
         error_response("CONFLICT", "Cannot delete SKU with active reserves", 409)
     
-    sku_count = db.query(SKU).filter(SKU.product_id == product.id).count()
-    if sku_count == 1 and product.status == ProductStatus.ON_MODERATION:
-        product.status = ProductStatus.CREATED
+    # Сохраняем данные для событий до удаления
+    sku_id_str = str(sku.id)
+    product_id_str = str(product.id)
+    seller_id_str = str(product.seller_id)
+    had_stock = sku.active_quantity > 0
+    sku_name = sku.name
+    sku_price = sku.price
     
+    # Проверяем, последний ли это SKU
+    sku_count = db.query(SKU).filter(SKU.product_id == product.id).count()
+    is_last_sku = sku_count == 1
+    was_on_moderation = product.status == ProductStatus.ON_MODERATION
+    
+    # 4. Обновляем статус товара если нужно
+    if is_last_sku and was_on_moderation:
+        product.status = ProductStatus.CREATED
+        product.moderation_comment = "Last SKU deleted, product returned to draft"
+        db.add(product)
+    
+    # 5. Удаляем SKU
     db.delete(sku)
+    db.flush()  # Не коммитим, чтобы можно было откатить при ошибке отправки
+    
+    # 6. Отправляем события
+    from datetime import datetime, timezone
+    
+    # 6.1 Если SKU был на витрине, отправляем SKU_OUT_OF_STOCK в B2C
+    if had_stock:
+        out_of_stock_payload = {
+            "event_type": "SKU_OUT_OF_STOCK",
+            "idempotency_key": str(uuid_module.uuid4()),
+            "occurred_at": datetime.now(timezone.utc).isoformat(),
+            "payload": {
+                "sku_id": sku_id_str,
+                "product_id": product_id_str,
+                "seller_id": seller_id_str,
+                "reason": "deleted"
+            }
+        }
+        save_to_outbox(
+            db=db,
+            event_type="SKU_OUT_OF_STOCK",
+            target="b2c",
+            url=os.getenv("B2C_WEBHOOK_URL", "http://b2c:8000/api/v1/b2b/events"),
+            payload=out_of_stock_payload,
+            headers={"X-Service-Key": os.getenv("B2B_TO_B2C_KEY", "")}
+        )
+    
+    # 6.2 Событие в Moderation (всегда PRODUCT_EDITED, т.к. SKU_DELETED нет в spec)
+    if is_last_sku and was_on_moderation:
+        # Последний SKU удалён - товар возвращается в CREATED
+        json_before = {
+            "product_id": product_id_str,
+            "seller_id": seller_id_str,
+            "title": product.title,
+            "status": ProductStatus.ON_MODERATION.value
+        }
+        json_after = {
+            "product_id": product_id_str,
+            "seller_id": seller_id_str,
+            "title": product.title,
+            "status": ProductStatus.CREATED.value
+        }
+        send_event_to_moderation(
+            product_id=product.id,
+            seller_id=product.seller_id,
+            idempotency_key=str(uuid_module.uuid4()),
+            db=db,
+            event_type="PRODUCT_EDITED",
+            json_before=json_before,
+            json_after=json_after,
+            category_id=product.category_id
+        )
+    elif was_on_moderation:
+        # Товар на модерации, но не последний SKU - уведомляем об изменении
+        json_before = {
+            "product_id": product_id_str,
+            "seller_id": seller_id_str,
+            "title": product.title,
+            "status": ProductStatus.ON_MODERATION.value
+        }
+        json_after = {
+            "product_id": product_id_str,
+            "seller_id": seller_id_str,
+            "title": product.title,
+            "status": ProductStatus.ON_MODERATION.value
+        }
+        send_event_to_moderation(
+            product_id=product.id,
+            seller_id=product.seller_id,
+            idempotency_key=str(uuid_module.uuid4()),
+            db=db,
+            event_type="PRODUCT_EDITED",
+            json_before=json_before,
+            json_after=json_after,
+            category_id=product.category_id
+        )
+    
+    # 7. Коммитим после успешной отправки всех событий
     db.commit()
+    
     return None
-
 
 # ========== SKU IMAGES ENDPOINTS ==========
 

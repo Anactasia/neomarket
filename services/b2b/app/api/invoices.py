@@ -24,7 +24,6 @@ from app.models.seller import Seller
 router = APIRouter()
 
 # Временный кэш для идемпотентности (TTL 1 час)
-# В production заменить на Redis
 _idempotency_cache: dict[str, dict] = {}
 
 
@@ -33,32 +32,29 @@ def error_response(code: str, message: str, status_code: int = 400):
 
 
 def _clean_expired_cache():
-    """Очищает устаревшие записи из кэша"""
     now = datetime.now(timezone.utc)
     expired = [k for k, v in _idempotency_cache.items() if v["expires_at"] < now]
     for k in expired:
         del _idempotency_cache[k]
 
 
+# ========== CREATE INVOICE ==========
+
 @router.post("/", response_model=InvoiceResponse, status_code=status.HTTP_201_CREATED)
 def create_invoice(
     invoice: InvoiceCreate,
-    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),  # ← опциональный
     db: Session = Depends(get_db),
     current_seller: Seller = Depends(get_current_seller)
 ):
-    """
-    Создать накладную на поступление товара - POST /api/v1/invoices/
-    
-    Idempotency-Key: обязательный заголовок для защиты от дублей (TTL 1 час)
-    """
+    """Создать накладную на поступление товара - POST /api/v1/invoices/"""
     _clean_expired_cache()
     
-    # Проверка идемпотентности
-    cache_key = f"invoice:create:{current_seller.id}:{idempotency_key}"
-    if cache_key in _idempotency_cache:
-        cached = _idempotency_cache[cache_key]
-        return cached["response"]
+    # Проверка идемпотентности (только если ключ передан)
+    if idempotency_key:
+        cache_key = f"invoice:create:{current_seller.id}:{idempotency_key}"
+        if cache_key in _idempotency_cache:
+            return _idempotency_cache[cache_key]["response"]
     
     # 1. Проверка на пустой список
     if not invoice.items or len(invoice.items) == 0:
@@ -73,12 +69,10 @@ def create_invoice(
     db_skus = db.query(SKU).filter(SKU.id.in_(sku_ids)).all()
     sku_map = {sku.id: sku for sku in db_skus}
     
-    # Проверяем, что все SKU найдены
     for sku_id in sku_ids:
         if sku_id not in sku_map:
             error_response("NOT_FOUND", f"SKU {sku_id} not found", 404)
     
-    # Проверяем ownership, статус товара и quantity
     for item in invoice.items:
         sku = sku_map[item.sku_id]
         
@@ -99,7 +93,7 @@ def create_invoice(
     db.add(db_invoice)
     db.flush()
     
-    # 4. Создаём позиции (accepted_quantity = 0 по умолчанию)
+    # 4. Создаём позиции
     for item in invoice.items:
         db_item = InvoiceItem(
             invoice_id=db_invoice.id,
@@ -112,7 +106,6 @@ def create_invoice(
     db.commit()
     db.refresh(db_invoice)
     
-    # 5. Формируем ответ
     db_items = db.query(InvoiceItem).filter(InvoiceItem.invoice_id == db_invoice.id).all()
     response_data = InvoiceResponse(
         id=db_invoice.id,
@@ -132,41 +125,143 @@ def create_invoice(
         ]
     )
     
-    # Сохраняем в кэш
-    _idempotency_cache[cache_key] = {
-        "response": response_data,
-        "expires_at": datetime.now(timezone.utc) + timedelta(hours=1)
-    }
+    if idempotency_key:
+        _idempotency_cache[cache_key] = {
+            "response": response_data,
+            "expires_at": datetime.now(timezone.utc) + timedelta(hours=1)
+        }
     
     return response_data
 
 
-# Остальные эндпоинты (GET, DELETE, GET /{id}) остаются без изменений
-# ...
+# ========== GET INVOICES (НОВЫЙ ЭНДПОИНТ) ==========
 
+@router.get("/", response_model=InvoicePaginatedResponse)
+def get_invoices(
+    limit: int = 20,
+    offset: int = 0,
+    status: Optional[InvoiceStatus] = None,
+    db: Session = Depends(get_db),
+    current_seller: Seller = Depends(get_current_seller)
+):
+    """Получить список накладных текущего продавца с пагинацией - GET /api/v1/invoices/"""
+    query = db.query(Invoice).filter(Invoice.seller_id == current_seller.id)
+    
+    if status:
+        query = query.filter(Invoice.status == status)
+    
+    total_count = query.count()
+    invoices = query.options(selectinload(Invoice.items)).offset(offset).limit(limit).all()
+    
+    result_items = []
+    for inv in invoices:
+        result_items.append(InvoiceResponse(
+            id=inv.id,
+            seller_id=inv.seller_id,
+            status=inv.status,
+            created_at=inv.created_at,
+            updated_at=inv.updated_at,
+            accepted_at=inv.accepted_at,
+            accepted_by=inv.accepted_by_id,
+            items=[
+                InvoiceItemResponse(
+                    id=item.id,
+                    sku_id=item.sku_id,
+                    quantity=item.quantity,
+                    accepted_quantity=item.accepted_quantity
+                ) for item in inv.items
+            ]
+        ))
+    
+    return InvoicePaginatedResponse(
+        items=result_items,
+        total_count=total_count,
+        limit=limit,
+        offset=offset
+    )
+
+
+# ========== DELETE INVOICE ==========
+
+@router.delete("/{invoice_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_invoice(
+    invoice_id: UUID,
+    db: Session = Depends(get_db),
+    current_seller: Seller = Depends(get_current_seller)
+):
+    """Удалить накладную (только в статусе CREATED) - DELETE /api/v1/invoices/{invoice_id}"""
+    invoice = db.query(Invoice).filter(
+        Invoice.id == invoice_id,
+        Invoice.seller_id == current_seller.id
+    ).first()
+    
+    if not invoice:
+        error_response("NOT_FOUND", "Invoice not found", 404)
+    
+    if invoice.status != InvoiceStatus.CREATED:
+        error_response("CONFLICT", "Invoice can only be deleted in CREATED status", 409)
+    
+    db.delete(invoice)
+    db.commit()
+    return None
+
+
+# ========== GET INVOICE BY ID ==========
+
+@router.get("/{invoice_id}", response_model=InvoiceResponse)
+def get_invoice(
+    invoice_id: UUID,
+    db: Session = Depends(get_db),
+    current_seller: Seller = Depends(get_current_seller)
+):
+    """Получить накладную по ID - GET /api/v1/invoices/{invoice_id}"""
+    invoice = db.query(Invoice).options(selectinload(Invoice.items)).filter(
+        Invoice.id == invoice_id,
+        Invoice.seller_id == current_seller.id
+    ).first()
+    
+    if not invoice:
+        error_response("NOT_FOUND", "Invoice not found", 404)
+    
+    return InvoiceResponse(
+        id=invoice.id,
+        seller_id=invoice.seller_id,
+        status=invoice.status,
+        created_at=invoice.created_at,
+        updated_at=invoice.updated_at,
+        accepted_at=invoice.accepted_at,
+        accepted_by=invoice.accepted_by_id,
+        items=[
+            InvoiceItemResponse(
+                id=item.id,
+                sku_id=item.sku_id,
+                quantity=item.quantity,
+                accepted_quantity=item.accepted_quantity
+            ) for item in invoice.items
+        ]
+    )
+
+
+# ========== ACCEPT INVOICE ==========
 
 @router.post("/{invoice_id}/accept", response_model=InvoiceResponse)
 def accept_invoice(
     invoice_id: UUID,
-    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key"),  # ← опциональный
     accept_request: Optional[InvoiceAcceptRequest] = None,
     db: Session = Depends(get_db),
     current_seller: Seller = Depends(get_current_seller)
 ):
-    """
-    Приёмка накладной - POST /api/v1/invoices/{invoice_id}/accept
-    
-    Idempotency-Key: обязательный заголовок для защиты от дублей (TTL 1 час)
-    """
+    """Приёмка накладной - POST /api/v1/invoices/{invoice_id}/accept"""
     _clean_expired_cache()
     
-    # Проверка идемпотентности
-    cache_key = f"invoice:accept:{current_seller.id}:{invoice_id}:{idempotency_key}"
-    if cache_key in _idempotency_cache:
-        cached = _idempotency_cache[cache_key]
-        return cached["response"]
+    # Проверка идемпотентности (только если ключ передан)
+    if idempotency_key:
+        cache_key = f"invoice:accept:{current_seller.id}:{invoice_id}:{idempotency_key}"
+        if cache_key in _idempotency_cache:
+            return _idempotency_cache[cache_key]["response"]
     
-    # 1. Загружаем накладную с items
+    # 1. Загружаем накладную с проверкой владельца
     invoice = db.query(Invoice).options(selectinload(Invoice.items)).filter(
         Invoice.id == invoice_id,
         Invoice.seller_id == current_seller.id
@@ -174,7 +269,7 @@ def accept_invoice(
     if not invoice:
         error_response("NOT_FOUND", "Invoice not found", 404)
     
-    # 2. Проверка статуса
+    # 2. Проверка статуса (блокируем PARTIALLY_ACCEPTED тоже)
     if invoice.status in [InvoiceStatus.ACCEPTED, InvoiceStatus.PARTIALLY_ACCEPTED, InvoiceStatus.CANCELLED]:
         error_response("INVALID_STATE", "Invoice cannot be accepted", 409)
     
@@ -216,11 +311,11 @@ def accept_invoice(
             ]
         )
         
-        # Сохраняем в кэш
-        _idempotency_cache[cache_key] = {
-            "response": response_data,
-            "expires_at": datetime.now(timezone.utc) + timedelta(hours=1)
-        }
+        if idempotency_key:
+            _idempotency_cache[cache_key] = {
+                "response": response_data,
+                "expires_at": datetime.now(timezone.utc) + timedelta(hours=1)
+            }
         
         return response_data
     
@@ -281,10 +376,10 @@ def accept_invoice(
         ]
     )
     
-    # Сохраняем в кэш
-    _idempotency_cache[cache_key] = {
-        "response": response_data,
-        "expires_at": datetime.now(timezone.utc) + timedelta(hours=1)
-    }
+    if idempotency_key:
+        _idempotency_cache[cache_key] = {
+            "response": response_data,
+            "expires_at": datetime.now(timezone.utc) + timedelta(hours=1)
+        }
     
     return response_data
