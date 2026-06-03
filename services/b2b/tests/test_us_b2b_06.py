@@ -698,3 +698,136 @@ class TestB2B06CreateInvoice:
         
         # Должен быть 404, т.к. invoice не найден по (id, seller_id)
         assert response.status_code == 404
+    
+
+    def test_get_invoices_returns_paginated_list(self, client, auth_headers, test_product_moderated):
+        """GET /invoices/ возвращает список накладных с пагинацией"""
+        # Создаём 3 накладные
+        for i in range(3):
+            client.post(
+                "/api/v1/invoices/",
+                json={"items": [{"sku_id": str(test_product_moderated["sku"].id), "quantity": 10}]},
+                headers=auth_headers
+            )
+        
+        response = client.get(
+            "/api/v1/invoices/",
+            params={"limit": 2, "offset": 0},
+            headers=auth_headers
+        )
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert "items" in data
+        assert "total_count" in data
+        assert data["total_count"] == 3
+        assert len(data["items"]) == 2
+        assert data["limit"] == 2
+        assert data["offset"] == 0
+
+
+    def test_get_invoices_filter_by_status(self, client, auth_headers, test_product_moderated):
+        """GET /invoices/?status_filter=CREATED возвращает только CREATED накладные"""
+        # Создаём накладную
+        resp = client.post(
+            "/api/v1/invoices/",
+            json={"items": [{"sku_id": str(test_product_moderated["sku"].id), "quantity": 10}]},
+            headers=auth_headers
+        )
+        assert resp.status_code == 201
+        
+        response = client.get(
+            "/api/v1/invoices/",
+            params={"status": "CREATED"},
+            headers=auth_headers
+        )
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_count"] >= 1
+        for item in data["items"]:
+            assert item["status"] == "CREATED"
+
+
+    def test_get_invoice_by_id_returns_200(self, client, auth_headers, test_product_moderated):
+        """GET /invoices/{id} возвращает накладную по ID"""
+        # Создаём накладную
+        resp = client.post(
+            "/api/v1/invoices/",
+            json={"items": [{"sku_id": str(test_product_moderated["sku"].id), "quantity": 10}]},
+            headers=auth_headers
+        )
+        assert resp.status_code == 201
+        invoice_id = resp.json()["id"]
+        
+        response = client.get(
+            f"/api/v1/invoices/{invoice_id}",
+            headers=auth_headers
+        )
+        
+        assert response.status_code == 200
+        data = response.json()
+        assert data["id"] == invoice_id
+        assert data["status"] == "CREATED"
+
+
+    def test_get_invoice_by_id_others_returns_404(self, client, auth_headers, test_other_seller_sku):
+        """Чужую накладную не видит → 404"""
+        # Создаём накладную от другого продавца
+        other_auth = {"Authorization": f"Bearer {create_access_token(data={'sub': str(test_other_seller_sku['other_seller'].id)})}"}
+        
+        resp = client.post(
+            "/api/v1/invoices/",
+            json={"items": [{"sku_id": str(test_other_seller_sku["sku"].id), "quantity": 5}]},
+            headers=other_auth
+        )
+        assert resp.status_code == 201
+        invoice_id = resp.json()["id"]
+        
+        # Текущий продавец пытается получить
+        response = client.get(
+            f"/api/v1/invoices/{invoice_id}",
+            headers=auth_headers
+        )
+        
+        assert response.status_code == 404
+
+
+    def test_accept_invoice_twice_returns_409(self, client, auth_headers, test_product_moderated, db_session):
+        """Повторная приёмка → 409 без удвоения остатков"""
+        from uuid import uuid4
+        
+        # Создаём накладную
+        invoice_resp = client.post(
+            "/api/v1/invoices/",
+            json={"items": [{"sku_id": str(test_product_moderated["sku"].id), "quantity": 10}]},
+            headers={**auth_headers, "Idempotency-Key": str(uuid4())}
+        )
+        assert invoice_resp.status_code == 201
+        invoice_id = invoice_resp.json()["id"]
+        invoice_item_id = invoice_resp.json()["items"][0]["id"]
+        
+        # Первая приёмка — частичная
+        resp1 = client.post(
+            f"/api/v1/invoices/{invoice_id}/accept",
+            json={"accepted_items": [{"invoice_item_id": invoice_item_id, "accepted_quantity": 5}]},
+            headers={**auth_headers, "Idempotency-Key": str(uuid4())}
+        )
+        assert resp1.status_code == 200
+        assert resp1.json()["status"] == "PARTIALLY_ACCEPTED"
+        
+        db_session.refresh(test_product_moderated["sku"])
+        active_qty_after_first = test_product_moderated["sku"].active_quantity
+        assert active_qty_after_first == 5
+        
+        # Вторая приёмка → 409
+        resp2 = client.post(
+            f"/api/v1/invoices/{invoice_id}/accept",
+            json={"accepted_items": [{"invoice_item_id": invoice_item_id, "accepted_quantity": 3}]},
+            headers={**auth_headers, "Idempotency-Key": str(uuid4())}
+        )
+        assert resp2.status_code == 409
+        assert resp2.json()["code"] == "INVALID_STATE"
+        
+        db_session.refresh(test_product_moderated["sku"])
+        assert test_product_moderated["sku"].active_quantity == active_qty_after_first
